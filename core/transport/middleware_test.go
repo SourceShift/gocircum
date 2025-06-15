@@ -27,19 +27,19 @@ func TestLoggingMiddleware(t *testing.T) {
 	wrappedTransport := loggingMW(mock)
 
 	// Call a method and check the log output
-	wrappedTransport.DialContext(context.Background(), "tcp", "127.0.0.1:8080")
+	_, _ = wrappedTransport.DialContext(context.Background(), "tcp", "127.0.0.1:8080")
 	if !strings.Contains(buf.String(), "Dialing tcp://127.0.0.1:8080") {
 		t.Errorf("Expected log message for Dial, but got: %s", buf.String())
 	}
 	buf.Reset() // Reset buffer for the next check
 
-	wrappedTransport.Listen(context.Background(), "tcp", "127.0.0.1:8080")
+	_, _ = wrappedTransport.Listen(context.Background(), "tcp", "127.0.0.1:8080")
 	if !strings.Contains(buf.String(), "Listening on tcp://127.0.0.1:8080") {
 		t.Errorf("Expected log message for Listen, but got: %s", buf.String())
 	}
 	buf.Reset()
 
-	wrappedTransport.Close()
+	_ = wrappedTransport.Close()
 	if !strings.Contains(buf.String(), "Closing transport") {
 		t.Errorf("Expected log message for Close, but got: %s", buf.String())
 	}
@@ -127,7 +127,7 @@ func TestRetryMiddleware(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Expected a successful connection, but got error: %v", err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	if attempts != maxAttempts {
 		t.Errorf("Expected %d attempts, but got %d", maxAttempts, attempts)
