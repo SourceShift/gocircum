@@ -30,11 +30,13 @@ func TestTCPTransport_Dial(t *testing.T) {
 		defer wg.Done()
 		conn, err := server.Accept()
 		if err != nil {
-			t.Logf("Server accept error: %v", err)
+			t.Errorf("Server accept error: %v", err)
 			return
 		}
 		defer conn.Close()
-		io.CopyN(conn, conn, 5)
+		if _, err := io.CopyN(conn, conn, 5); err != nil {
+			t.Errorf("Server copy error: %v", err)
+		}
 	}()
 
 	// Create TCP transport
@@ -94,11 +96,13 @@ func TestTCPTransport_DialTLS(t *testing.T) {
 		defer wg.Done()
 		conn, err := server.Accept()
 		if err != nil {
-			t.Logf("Server accept error: %v", err)
+			t.Errorf("Server accept error: %v", err)
 			return
 		}
 		defer conn.Close()
-		io.CopyN(conn, conn, int64(len("hello tls")))
+		if _, err := io.CopyN(conn, conn, int64(len("hello tls"))); err != nil {
+			t.Errorf("Server copy error: %v", err)
+		}
 	}()
 
 	// Create TCP transport with TLS config
@@ -154,7 +158,9 @@ func BenchmarkTCPTransport_Dial(b *testing.B) {
 				defer c.Close()
 				// Read one byte and close, to complete the client's request
 				buf := make([]byte, 1)
-				io.ReadFull(c, buf)
+				if _, err := io.ReadFull(c, buf); err != nil {
+					b.Logf("Benchmark server ReadFull failed: %v", err)
+				}
 			}(conn)
 		}
 	}()
