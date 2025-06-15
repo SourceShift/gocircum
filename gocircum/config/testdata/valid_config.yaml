@@ -1,0 +1,20 @@
+strategies:
+  - name: "chrome_utls_tcp"
+    enabled: true
+    transport:
+      protocol: "tcp"
+    tls:
+      library: "utls"
+      client_hello_id: "HelloChrome_Auto"
+    middleware:
+      - name: "packet_fragmentation"
+        parameters:
+          packet_sizes: [10, 20, 30]
+          delay: 5
+  - name: "firefox_go_quic"
+    enabled: false
+    transport:
+      protocol: "quic"
+    tls:
+      library: "uquic"
+      client_hello_id: "HelloFirefox_Auto" 

@@ -1,0 +1,8 @@
+strategies:
+  - name: ""
+    enabled: true
+    transport:
+      protocol: "tcp"
+    tls:
+      library: "utls"
+      client_hello_id: "HelloChrome_Auto" 
