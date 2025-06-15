@@ -1,0 +1,48 @@
+name: Go CI/CD
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: '1.21'
+
+    - name: Install dependencies
+      run: go get .
+
+    - name: Build Core Library
+      run: go build -v ./core/...
+
+    - name: Test Core Library
+      run: go test -v ./core/...
+
+    - name: Build CLI
+      run: |
+        # This is a placeholder. A real build would use GoReleaser or similar
+        # to build for multiple platforms.
+        echo "Building CLI for linux/amd64..."
+        go build -v -o gocircum-cli ./cli
+
+    - name: Build Mobile Bindings
+      run: |
+        # This is a placeholder. A real build would require a more complex
+        # setup with Android NDK and Xcode.
+        echo "Simulating mobile build..."
+        go install golang.org/x/mobile/cmd/gomobile@latest
+        gomobile init
+        # gomobile bind -target=android ./mobile/bridge
+        # gomobile bind -target=ios ./mobile/bridge
+        echo "Mobile build placeholder complete."
+
+  # TODO: Add a 'release' job that triggers on tags, builds all artifacts,
+  # and uploads them to a GitHub Release. 
