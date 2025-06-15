@@ -2,35 +2,28 @@ package transport
 
 import (
 	"context"
-	"io"
 	"net"
 )
 
-// Transport defines the interface for a generic network transport.
-// It is responsible for establishing and managing the underlying connection.
+// Transport is the interface for network transports.
+// It abstracts the underlying protocol (TCP, QUIC, etc.).
 type Transport interface {
-	// DialContext connects to the address on the named network using
-	// the provided context.
+	// DialContext connects to the given address.
 	DialContext(ctx context.Context, network, address string) (net.Conn, error)
-
 	// Listen creates a listener on the specified network address.
 	Listen(ctx context.Context, network, address string) (net.Listener, error)
-
-	// io.Closer is responsible for closing the transport's underlying resources.
-	io.Closer
+	// Close closes the transport, releasing any resources.
+	Close() error
 }
-
-// Config holds the common configuration options for a transport.
-// Specific transport implementations may embed this and add their own options.
-type Config struct {
-	// TODO: Add common transport configuration fields here,
-	// e.g., timeouts, buffer sizes, etc.
-}
-
-// Factory is a function that creates a new Transport with the given config.
-type Factory func(cfg *Config) (Transport, error)
 
 // Middleware is a function that wraps a Transport to add functionality.
 type Middleware func(transport Transport) Transport
+
+// Config is a placeholder for common configuration options.
+// TODO: Expand with common options like timeouts.
+type Config struct{}
+
+// Factory is a function that creates a new Transport with the given config.
+type Factory func(cfg *Config) (Transport, error)
 
 // TODO: Define specific transport-related error types here.
