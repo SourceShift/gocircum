@@ -4,6 +4,7 @@ go 1.23.4
 
 require (
 	github.com/andybalholm/brotli v1.1.0 // indirect
+	github.com/armon/go-socks5 v0.0.0-20160902184237-e75332964ef5 // indirect
 	github.com/cloudflare/circl v1.3.8 // indirect
 	github.com/gaukas/clienthellod v0.4.2 // indirect
 	github.com/gaukas/godicttls v0.0.4 // indirect
