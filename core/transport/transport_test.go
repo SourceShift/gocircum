@@ -77,8 +77,7 @@ func TestMiddleware(t *testing.T) {
 
 // TestInterfaces tests that the defined interfaces can be used as expected.
 func TestInterfaces(t *testing.T) {
-	var transport Transport
-	transport = &mockTransport{
+	transport := &mockTransport{
 		dialer: func(ctx context.Context, network, address string) (net.Conn, error) {
 			return &net.TCPConn{}, nil
 		},
