@@ -30,7 +30,7 @@ func init() {
 }
 
 // InitLogger initializes the global logger with a specific configuration.
-func InitLogger(level string, format string) {
+func InitLogger(level string, format string, output zapcore.WriteSyncer) {
 	var cfg zap.Config
 	if format == "json" {
 		cfg = zap.NewProductionConfig()
@@ -49,6 +49,13 @@ func InitLogger(level string, format string) {
 	logger, err := cfg.Build()
 	if err != nil {
 		panic(err)
+	}
+
+	if output != nil {
+		logger = zap.New(logger.Core(), zap.WrapCore(func(c zapcore.Core) zapcore.Core {
+			encoder := zapcore.NewConsoleEncoder(cfg.EncoderConfig)
+			return zapcore.NewCore(encoder, output, cfg.Level)
+		}))
 	}
 	globalLogger = &zapLogger{logger.Sugar()}
 }

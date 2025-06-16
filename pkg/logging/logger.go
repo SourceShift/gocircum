@@ -1,3 +1,5 @@
+//go:generate mockgen -package=mocks -destination=../../mocks/mock_logger.go gocircum/pkg/logging Logger
+
 package logging
 
 // Logger defines a common interface for logging.
