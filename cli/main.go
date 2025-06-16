@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"text/tabwriter"
 )
 
 func main() {
@@ -97,8 +98,11 @@ func runTest() {
 		log.Fatalf("Failed to test strategies: %v", err)
 	}
 
-	// TODO: Print results in a nice table format.
-	fmt.Println("\n--- Test Results ---")
+	// Print results in a nice table format.
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, 3, ' ', tabwriter.Debug)
+	fmt.Fprintln(w, "ID\tDESCRIPTION\tSTATUS\tLATENCY")
+	fmt.Fprintln(w, "--\t-----------\t------\t-------")
+
 	for _, res := range results {
 		status := "FAIL"
 		latency := "N/A"
@@ -106,8 +110,7 @@ func runTest() {
 			status = "SUCCESS"
 			latency = res.Latency.String()
 		}
-		fmt.Printf("Strategy: %s (%s)\n", res.Fingerprint.ID, res.Fingerprint.Description)
-		fmt.Printf("  Status: %s\n", status)
-		fmt.Printf("  Latency: %s\n\n", latency)
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", res.Fingerprint.ID, res.Fingerprint.Description, status, latency)
 	}
+	w.Flush()
 }
