@@ -13,9 +13,22 @@ import (
 	utls "github.com/refraction-networking/utls"
 )
 
+//go:generate mockgen -package=mocks -destination=../../mocks/mock_dialer_factory.go gocircum/core/engine DialerFactory
+
+// Dialer is a function that can establish a network connection.
+type Dialer func(ctx context.Context, network, addr string) (net.Conn, error)
+
+// DialerFactory creates a Dialer based on transport and TLS configurations.
+type DialerFactory interface {
+	NewDialer(transportCfg *config.Transport, tlsCfg *config.TLS) (Dialer, error)
+}
+
+// DefaultDialerFactory is the default implementation of DialerFactory.
+type DefaultDialerFactory struct{}
+
 // NewDialer creates a new network dialer based on the transport configuration.
 // It returns a function that can be used to establish a connection.
-func NewDialer(transportCfg *config.Transport, tlsCfg *config.TLS) (func(ctx context.Context, network, addr string) (net.Conn, error), error) {
+func (f *DefaultDialerFactory) NewDialer(transportCfg *config.Transport, tlsCfg *config.TLS) (Dialer, error) {
 	var dialer transport.Transport
 	var err error
 

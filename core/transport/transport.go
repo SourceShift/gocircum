@@ -1,3 +1,5 @@
+//go:generate mockgen -package=mocks -destination=../../mocks/mock_transport.go gocircum/core/transport Transport
+
 package transport
 
 import (

@@ -1,3 +1,4 @@
+//go:generate mockgen -package=mocks -destination=../mocks/mock_engine.go gocircum/interfaces Engine
 package interfaces
 
 import (

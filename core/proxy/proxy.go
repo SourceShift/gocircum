@@ -23,7 +23,8 @@ type Proxy struct {
 func New(addr string, dialer CustomDialer) (*Proxy, error) {
 	conf := &socks5.Config{
 		// The custom dialer is the key to integrating our transport logic.
-		Dial: dialer,
+		Dial:     dialer,
+		Resolver: NewDoHResolver(),
 	}
 
 	server, err := socks5.New(conf)

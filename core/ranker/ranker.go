@@ -6,12 +6,19 @@ import (
 	"gocircum/core/config"
 	"gocircum/core/engine"
 	"gocircum/pkg/logging"
+	"math/rand"
 	"sort"
 	"sync"
 	"time"
 )
 
-const CanaryDomain = "www.cloudflare.com:443"
+var CanaryDomains = []string{
+	"www.cloudflare.com:443",
+	"www.google.com:443",
+	"www.amazon.com:443",
+	"www.microsoft.com:443",
+	"www.apple.com:443",
+}
 
 // StrategyResult holds the outcome of testing a single fingerprint.
 type StrategyResult struct {
@@ -28,10 +35,11 @@ type CacheEntry struct {
 
 // Ranker tests and ranks connection strategies.
 type Ranker struct {
-	ActiveProbes *list.List
-	Cache        map[string]*CacheEntry
-	CacheLock    sync.RWMutex
-	Logger       logging.Logger
+	ActiveProbes  *list.List
+	Cache         map[string]*CacheEntry
+	CacheLock     sync.RWMutex
+	Logger        logging.Logger
+	DialerFactory engine.DialerFactory
 }
 
 // NewRanker creates a new Ranker instance.
@@ -40,9 +48,10 @@ func NewRanker(logger logging.Logger) *Ranker {
 		logger = logging.GetLogger()
 	}
 	return &Ranker{
-		ActiveProbes: list.New(),
-		Logger:       logger,
-		Cache:        make(map[string]*CacheEntry),
+		ActiveProbes:  list.New(),
+		Logger:        logger,
+		Cache:         make(map[string]*CacheEntry),
+		DialerFactory: &engine.DefaultDialerFactory{},
 	}
 }
 
@@ -111,13 +120,19 @@ func (r *Ranker) TestAndRank(ctx context.Context, fingerprints []*config.Fingerp
 
 // testStrategy performs a single connection test.
 func (r *Ranker) testStrategy(ctx context.Context, fingerprint *config.Fingerprint) (bool, time.Duration, error) {
-	dialer, err := engine.NewDialer(&fingerprint.Transport, &fingerprint.TLS)
+	dialer, err := r.DialerFactory.NewDialer(&fingerprint.Transport, &fingerprint.TLS)
 	if err != nil {
 		return false, 0, err
 	}
 
+	// Add random jitter to break timing patterns
+	time.Sleep(time.Duration(50+rand.Intn(200)) * time.Millisecond)
+
+	// Randomly select a canary domain
+	domain := CanaryDomains[rand.Intn(len(CanaryDomains))]
+
 	start := time.Now()
-	conn, err := dialer(ctx, "tcp", CanaryDomain)
+	conn, err := dialer(ctx, "tcp", domain)
 	if err != nil {
 		return false, 0, err
 	}

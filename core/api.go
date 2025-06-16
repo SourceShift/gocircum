@@ -130,7 +130,8 @@ func (e *Engine) StartProxyWithStrategy(ctx context.Context, addr string, fp *co
 
 func (e *Engine) createDialerForStrategy(fp *config.Fingerprint) (proxy.CustomDialer, error) {
 	// 1. Create the base dialer (TCP/QUIC with fragmentation)
-	baseDialer, err := engine.NewDialer(&fp.Transport, &fp.TLS)
+	factory := &engine.DefaultDialerFactory{}
+	baseDialer, err := factory.NewDialer(&fp.Transport, &fp.TLS)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create base dialer: %w", err)
 	}
