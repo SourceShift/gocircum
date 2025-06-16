@@ -73,6 +73,11 @@ func (t *TCPTransport) DialContext(ctx context.Context, network, address string)
 // Listen creates a listener on the specified network address. If a TLS config
 // is provided, it returns a TLS listener.
 func (t *TCPTransport) Listen(ctx context.Context, network, address string) (net.Listener, error) {
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
+	}
 	var lc net.ListenConfig
 	ln, err := lc.Listen(ctx, network, address)
 	if err != nil {

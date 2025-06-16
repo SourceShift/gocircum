@@ -52,6 +52,12 @@ func (t *QUICTransport) DialContext(ctx context.Context, network, address string
 
 // Listen starts a QUIC listener on the given address.
 func (t *QUICTransport) Listen(ctx context.Context, network, address string) (net.Listener, error) {
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
+	}
+
 	l, err := quic.ListenAddr(address, t.tlsConfig, t.quicConfig)
 	if err != nil {
 		return nil, fmt.Errorf("quic listen failed: %w", err)
