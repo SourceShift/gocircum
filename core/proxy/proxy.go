@@ -61,3 +61,8 @@ func (p *Proxy) Addr() string {
 	}
 	return p.listener.Addr().String()
 }
+
+// GetListener returns the underlying net.Listener. This is used for testing.
+func (p *Proxy) GetListener() net.Listener {
+	return p.listener
+}

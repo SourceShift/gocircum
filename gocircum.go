@@ -1,3 +1,5 @@
+// Package gocircum provides the primary interface to the circumvention engine,
+// wrapping the core logic with a simplified API.
 package gocircum
 
 import (
@@ -7,6 +9,7 @@ import (
 	"gocircum/core/config"
 	"gocircum/core/ranker"
 	"gocircum/interfaces"
+	"gocircum/pkg/logging"
 )
 
 // Engine represents the circumvention engine.
@@ -15,8 +18,8 @@ type Engine struct {
 }
 
 // NewEngine creates a new instance of the circumvention engine from a set of fingerprints.
-func NewEngine(fingerprints []*config.Fingerprint) (interfaces.Engine, error) {
-	coreEngine, err := core.NewEngine(fingerprints)
+func NewEngine(fingerprints []config.Fingerprint, logger logging.Logger) (interfaces.Engine, error) {
+	coreEngine, err := core.NewEngine(fingerprints, logger)
 	if err != nil {
 		return nil, err
 	}
@@ -44,7 +47,7 @@ func (e *Engine) Stop() error {
 
 // Status returns the current operational status of the engine.
 func (e *Engine) Status() (string, error) {
-	return e.coreEngine.Status()
+	return e.coreEngine.Status(), nil
 }
 
 // TestStrategies tests all available fingerprints and returns the ranked results.

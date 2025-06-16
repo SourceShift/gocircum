@@ -4,48 +4,66 @@ import (
 	"context"
 	"fmt"
 	"gocircum/core/config"
+	"gocircum/core/constants"
 	"gocircum/core/transport"
 	"math/rand"
 	"net"
 	"time"
+
+	utls "github.com/refraction-networking/utls"
 )
 
 // NewDialer creates a new network dialer based on the transport configuration.
 // It returns a function that can be used to establish a connection.
-func NewDialer(cfg *config.Transport) (func(ctx context.Context, network, addr string) (net.Conn, error), error) {
+func NewDialer(transportCfg *config.Transport, tlsCfg *config.TLS) (func(ctx context.Context, network, addr string) (net.Conn, error), error) {
 	var dialer transport.Transport
 	var err error
 
-	// The TLS config is handled by the client factory, so we pass nil here.
-	switch cfg.Protocol {
+	switch transportCfg.Protocol {
 	case "tcp":
-		dialer, err = transport.NewTCPTransport(&transport.TCPConfig{
-			// TLSConfig is handled by the client factory
-		})
+		dialer, err = transport.NewTCPTransport(&transport.TCPConfig{})
 		if err != nil {
 			return nil, fmt.Errorf("failed to create TCP transport: %w", err)
 		}
 	case "quic":
-		// QUIC requires a TLS config, but we create a temporary one here.
-		// The real TLS config will be applied by the client factory.
-		// This is a limitation of the current uquic library.
+		utlsConfig, err := buildQUICUTLSConfig(tlsCfg)
+		if err != nil {
+			return nil, fmt.Errorf("failed to build uTLS config for QUIC: %w", err)
+		}
 		dialer, err = transport.NewQUICTransport(&transport.QUICConfig{
-			// TLSConfig is handled by the client factory
+			TLSConfig: utlsConfig,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("failed to create QUIC transport: %w", err)
 		}
 	default:
-		return nil, fmt.Errorf("unsupported transport protocol: %s", cfg.Protocol)
+		return nil, fmt.Errorf("unsupported transport protocol: %s", transportCfg.Protocol)
 	}
 
 	// Wrap the dialer in fragmentation middleware if configured.
-	if cfg.Fragmentation != nil {
-		middleware := newFragmenter(cfg.Fragmentation)
+	if transportCfg.Fragmentation != nil {
+		middleware := newFragmenter(transportCfg.Fragmentation)
 		dialer = middleware(dialer)
 	}
 
 	return dialer.DialContext, nil
+}
+
+func buildQUICUTLSConfig(cfg *config.TLS) (*utls.Config, error) {
+	minVersion, ok := constants.TLSVersionMap[cfg.MinVersion]
+	if !ok {
+		return nil, fmt.Errorf("unknown min TLS version: %s", cfg.MinVersion)
+	}
+	maxVersion, ok := constants.TLSVersionMap[cfg.MaxVersion]
+	if !ok {
+		return nil, fmt.Errorf("unknown max TLS version: %s", cfg.MaxVersion)
+	}
+
+	return &utls.Config{
+		InsecureSkipVerify: cfg.SkipVerify,
+		MinVersion:         minVersion,
+		MaxVersion:         maxVersion,
+	}, nil
 }
 
 // newFragmenter creates a middleware that fragments the initial data chunks (i.e. ClientHello)
@@ -66,7 +84,7 @@ type fragmentingTransport struct {
 func (t *fragmentingTransport) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
 	conn, err := t.Transport.DialContext(ctx, network, address)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("dial for fragmentation failed: %w", err)
 	}
 	return &fragmentingConn{
 		Conn: conn,
@@ -105,7 +123,7 @@ func (c *fragmentingConn) Write(b []byte) (n int, err error) {
 
 		sent, err := c.Conn.Write(b[:chunkSize])
 		if err != nil {
-			return totalSent + sent, err
+			return totalSent + sent, fmt.Errorf("fragmented write failed: %w", err)
 		}
 		totalSent += sent
 		b = b[sent:]
@@ -125,7 +143,7 @@ func (c *fragmentingConn) Write(b []byte) (n int, err error) {
 	if len(b) > 0 {
 		sent, err := c.Conn.Write(b)
 		if err != nil {
-			return totalSent + sent, err
+			return totalSent + sent, fmt.Errorf("final fragmented write failed: %w", err)
 		}
 		totalSent += sent
 	}

@@ -7,48 +7,41 @@ import (
 	"gocircum/core/engine"
 	"gocircum/core/proxy"
 	"gocircum/core/ranker"
+	"gocircum/pkg/logging"
 	"net"
 	"sync"
 )
 
 // Engine is the main controller for the circumvention library.
 type Engine struct {
-	ranker       *ranker.Ranker
-	fingerprints []*config.Fingerprint
-	activeProxy  *proxy.Proxy
-	proxyErr     error
-	mu           sync.Mutex
-	// TODO: Add fields for fingerprints, active proxy, etc.
+	ranker         *ranker.Ranker
+	fingerprints   []config.Fingerprint
+	activeProxy    *proxy.Proxy
+	mu             sync.Mutex
+	proxyErrorChan chan error
+	logger         logging.Logger
 }
 
 // NewEngine creates a new core engine with a given set of fingerprints.
-func NewEngine(fingerprints []*config.Fingerprint) (*Engine, error) {
+func NewEngine(fingerprints []config.Fingerprint, logger logging.Logger) (*Engine, error) {
 	if len(fingerprints) == 0 {
 		return nil, fmt.Errorf("engine must be initialized with at least one fingerprint")
 	}
+	if logger == nil {
+		logger = logging.GetLogger()
+	}
 	return &Engine{
-		ranker:       ranker.NewRanker(),
-		fingerprints: fingerprints,
+		ranker:         ranker.NewRanker(logger),
+		fingerprints:   fingerprints,
+		proxyErrorChan: make(chan error, 1),
+		logger:         logger.With("component", "engine"),
 	}, nil
 }
 
 // Start starts the proxy with a default strategy and address.
 // It is a non-blocking call.
 func (e *Engine) Start() error {
-	addr := "127.0.0.1:1080" // Default address
-	fp := &config.Fingerprint{
-		ID:          "default_placeholder",
-		Description: "Default TCP with stdlib TLS 1.3",
-		Transport: config.Transport{
-			Protocol: "tcp",
-		},
-		TLS: config.TLS{
-			Library:    "stdlib",
-			MinVersion: "1.3",
-			MaxVersion: "1.3",
-		},
-	}
-	return e.StartProxyWithStrategy(context.Background(), addr, fp)
+	return fmt.Errorf("Start is deprecated; use StartProxyWithStrategy with a specific strategy")
 }
 
 // Stop gracefully stops the running proxy.
@@ -61,29 +54,39 @@ func (e *Engine) Stop() error {
 	}
 
 	err := e.activeProxy.Stop()
+	if err != nil {
+		return fmt.Errorf("failed to stop proxy: %w", err)
+	}
 	e.activeProxy = nil // Signal graceful shutdown
-	return err
+	return nil
 }
 
 // Status returns the current status of the proxy.
-func (e *Engine) Status() (string, error) {
+func (e *Engine) Status() string {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	if e.proxyErr != nil {
-		err := e.proxyErr
-		e.proxyErr = nil // Clear error after reporting
-		return fmt.Sprintf("Proxy failed: %v", err), err
-	}
 	if e.activeProxy != nil {
-		return fmt.Sprintf("Proxy running on %s", e.activeProxy.Addr()), nil
+		return fmt.Sprintf("Proxy running on %s", e.activeProxy.Addr())
 	}
-	return "Proxy stopped", nil
+	return "Proxy stopped"
 }
 
 // TestStrategies tests all available fingerprints and returns the ranked results.
 func (e *Engine) TestStrategies(ctx context.Context) ([]ranker.StrategyResult, error) {
-	return e.ranker.TestAndRank(ctx, e.fingerprints)
+	e.logger.Info("Testing all strategies...")
+	// Convert to slice of pointers for the ranker
+	var fps []*config.Fingerprint
+	for i := range e.fingerprints {
+		fps = append(fps, &e.fingerprints[i])
+	}
+	results, err := e.ranker.TestAndRank(ctx, fps)
+	if err != nil {
+		e.logger.Error("Failed to test and rank strategies", "error", err)
+	} else {
+		e.logger.Info("Finished testing strategies", "num_results", len(results))
+	}
+	return results, err
 }
 
 // StartProxyWithStrategy starts a SOCKS5 proxy using a specific fingerprint.
@@ -106,10 +109,9 @@ func (e *Engine) StartProxyWithStrategy(ctx context.Context, addr string, fp *co
 		return fmt.Errorf("could not create proxy: %w", err)
 	}
 	e.activeProxy = p
-	e.proxyErr = nil
 
 	go func() {
-		fmt.Printf("Starting proxy with strategy '%s' on %s\n", fp.Description, p.Addr())
+		e.logger.Info("Starting proxy with strategy", "strategy", fp.Description, "address", p.Addr())
 		err := p.Start()
 
 		e.mu.Lock()
@@ -118,7 +120,8 @@ func (e *Engine) StartProxyWithStrategy(ctx context.Context, addr string, fp *co
 		// We should only store the error if it was not a graceful stop.
 		// A graceful stop is signaled by setting e.activeProxy to nil.
 		if e.activeProxy != nil {
-			e.proxyErr = err
+			e.proxyErrorChan <- err
+			e.activeProxy = nil // Reset proxy on error
 		}
 	}()
 
@@ -127,22 +130,22 @@ func (e *Engine) StartProxyWithStrategy(ctx context.Context, addr string, fp *co
 
 func (e *Engine) createDialerForStrategy(fp *config.Fingerprint) (proxy.CustomDialer, error) {
 	// 1. Create the base dialer (TCP/QUIC with fragmentation)
-	baseDialer, err := engine.NewDialer(&fp.Transport)
+	baseDialer, err := engine.NewDialer(&fp.Transport, &fp.TLS)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to create base dialer: %w", err)
 	}
 
 	// 2. Create the full dialer function that includes the TLS layer
 	fullDialer := func(ctx context.Context, network, address string) (net.Conn, error) {
 		rawConn, err := baseDialer(ctx, network, address)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("base dialer failed: %w", err)
 		}
 
 		tlsConn, err := engine.NewTLSClient(rawConn, &fp.TLS)
 		if err != nil {
 			rawConn.Close()
-			return nil, err
+			return nil, fmt.Errorf("tls client creation failed: %w", err)
 		}
 		return tlsConn, nil
 	}
@@ -152,25 +155,33 @@ func (e *Engine) createDialerForStrategy(fp *config.Fingerprint) (proxy.CustomDi
 
 // GetBestStrategy tests all available strategies and returns the best one.
 func (e *Engine) GetBestStrategy(ctx context.Context) (*config.Fingerprint, error) {
-	results, err := e.ranker.TestAndRank(ctx, e.fingerprints)
+	e.logger.Info("Getting best strategy...")
+	// Convert to slice of pointers for the ranker
+	var fps []*config.Fingerprint
+	for i := range e.fingerprints {
+		fps = append(fps, &e.fingerprints[i])
+	}
+	results, err := e.ranker.TestAndRank(ctx, fps)
 	if err != nil {
 		return nil, fmt.Errorf("failed to test and rank strategies: %w", err)
 	}
 
 	for _, res := range results {
 		if res.Success {
+			e.logger.Info("Found best strategy", "id", res.Fingerprint.ID)
 			return res.Fingerprint, nil
 		}
 	}
 
+	e.logger.Warn("No successful strategy found")
 	return nil, fmt.Errorf("no successful strategy found")
 }
 
 // GetStrategyByID returns a strategy fingerprint by its ID.
 func (e *Engine) GetStrategyByID(id string) (*config.Fingerprint, error) {
-	for _, fp := range e.fingerprints {
+	for i, fp := range e.fingerprints {
 		if fp.ID == id {
-			return fp, nil
+			return &e.fingerprints[i], nil
 		}
 	}
 	return nil, fmt.Errorf("strategy with ID '%s' not found", id)

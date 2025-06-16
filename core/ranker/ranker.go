@@ -1,11 +1,13 @@
 package ranker
 
 import (
+	"container/list"
 	"context"
-	"fmt"
 	"gocircum/core/config"
 	"gocircum/core/engine"
+	"gocircum/pkg/logging"
 	"sort"
+	"sync"
 	"time"
 )
 
@@ -18,14 +20,30 @@ type StrategyResult struct {
 	Latency     time.Duration
 }
 
+type CacheEntry struct {
+	FingerprintID string
+	Latency       time.Duration
+	Timestamp     time.Time
+}
+
 // Ranker tests and ranks connection strategies.
 type Ranker struct {
-	// TODO: Add a cache for results to avoid re-testing.
+	ActiveProbes *list.List
+	Cache        map[string]*CacheEntry
+	CacheLock    sync.RWMutex
+	Logger       logging.Logger
 }
 
 // NewRanker creates a new Ranker instance.
-func NewRanker() *Ranker {
-	return &Ranker{}
+func NewRanker(logger logging.Logger) *Ranker {
+	if logger == nil {
+		logger = logging.GetLogger()
+	}
+	return &Ranker{
+		ActiveProbes: list.New(),
+		Logger:       logger,
+		Cache:        make(map[string]*CacheEntry),
+	}
 }
 
 // TestAndRank sorts fingerprints by success and latency.
@@ -33,11 +51,37 @@ func (r *Ranker) TestAndRank(ctx context.Context, fingerprints []*config.Fingerp
 	results := make(chan StrategyResult, len(fingerprints))
 	for _, fp := range fingerprints {
 		go func(fingerprint *config.Fingerprint) {
+			// Check cache first
+			r.CacheLock.RLock()
+			entry, found := r.Cache[fingerprint.ID]
+			r.CacheLock.RUnlock()
+
+			if found && time.Since(entry.Timestamp) < 5*time.Minute { // 5-minute cache validity
+				r.Logger.Debug("cache hit", "strategy_id", fingerprint.ID)
+				results <- StrategyResult{
+					Fingerprint: fingerprint,
+					Success:     true,
+					Latency:     entry.Latency,
+				}
+				return
+			}
+			r.Logger.Debug("cache miss", "strategy_id", fingerprint.ID)
 			success, latency, err := r.testStrategy(ctx, fingerprint)
 			if err != nil {
-				// TODO: Use a proper logger
-				fmt.Printf("testing strategy %s failed: %v\n", fingerprint.ID, err)
+				r.Logger.Warn("testing strategy failed", "strategy_id", fingerprint.ID, "error", err)
 			}
+
+			if success {
+				// Update cache
+				r.CacheLock.Lock()
+				r.Cache[fingerprint.ID] = &CacheEntry{
+					FingerprintID: fingerprint.ID,
+					Latency:       latency,
+					Timestamp:     time.Now(),
+				}
+				r.CacheLock.Unlock()
+			}
+
 			results <- StrategyResult{
 				Fingerprint: fingerprint,
 				Success:     success,
@@ -65,31 +109,21 @@ func (r *Ranker) TestAndRank(ctx context.Context, fingerprints []*config.Fingerp
 	return rankedResults, nil
 }
 
-// testStrategy attempts to connect to the canary domain using a given fingerprint.
+// testStrategy performs a single connection test.
 func (r *Ranker) testStrategy(ctx context.Context, fingerprint *config.Fingerprint) (bool, time.Duration, error) {
-	dialerFunc, err := engine.NewDialer(&fingerprint.Transport)
+	dialer, err := engine.NewDialer(&fingerprint.Transport, &fingerprint.TLS)
 	if err != nil {
-		return false, 0, fmt.Errorf("failed to create dialer: %w", err)
+		return false, 0, err
 	}
 
 	start := time.Now()
-
-	// Use a context with a timeout for the entire connection process.
-	dialCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-
-	rawConn, err := dialerFunc(dialCtx, "tcp", CanaryDomain)
+	conn, err := dialer(ctx, "tcp", CanaryDomain)
 	if err != nil {
-		return false, 0, fmt.Errorf("transport dial failed: %w", err)
+		return false, 0, err
 	}
-	defer rawConn.Close()
-
-	tlsConn, err := engine.NewTLSClient(rawConn, &fingerprint.TLS)
-	if err != nil {
-		return false, 0, fmt.Errorf("tls handshake failed: %w", err)
-	}
+	defer conn.Close()
 	latency := time.Since(start)
-	defer tlsConn.Close()
 
+	// Could add a simple echo test here for verification
 	return true, latency, nil
 }

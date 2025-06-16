@@ -14,12 +14,12 @@ func TestEngineLifecycle(t *testing.T) {
 		t.Skip("test_strategies.yaml not found, skipping lifecycle test.")
 	}
 
-	fingerprints, err := config.LoadFingerprintsFromFile("test_strategies.yaml")
+	fingerprintStructs, err := config.LoadFingerprintsFromFile("test_strategies.yaml")
 	if err != nil {
 		t.Fatalf("Failed to load test fingerprints: %v", err)
 	}
 
-	engine, err := gocircum.NewEngine(fingerprints)
+	engine, err := gocircum.NewEngine(fingerprintStructs, nil)
 	if err != nil {
 		t.Fatalf("Failed to create engine: %v", err)
 	}
@@ -53,11 +53,11 @@ func TestCanBeImported(t *testing.T) {
 	if _, err := os.Stat("test_strategies.yaml"); os.IsNotExist(err) {
 		t.Skip("test_strategies.yaml not found, skipping import test.")
 	}
-	fingerprints, err := config.LoadFingerprintsFromFile("test_strategies.yaml")
+	fingerprintStructs, err := config.LoadFingerprintsFromFile("test_strategies.yaml")
 	if err != nil {
 		t.Fatalf("Failed to load test fingerprints: %v", err)
 	}
-	_, err = gocircum.NewEngine(fingerprints)
+	_, err = gocircum.NewEngine(fingerprintStructs, nil)
 	if err != nil {
 		t.Fatalf("gocircum library could not be initialized in a test context: %v", err)
 	}
