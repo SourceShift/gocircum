@@ -13,17 +13,34 @@ import (
 
 // Engine is the main controller for the circumvention library.
 type Engine struct {
-	ranker      *ranker.Ranker
-	activeProxy *proxy.Proxy
-	proxyErr    error
-	mu          sync.Mutex
+	ranker       *ranker.Ranker
+	fingerprints []*config.Fingerprint
+	activeProxy  *proxy.Proxy
+	proxyErr     error
+	mu           sync.Mutex
 	// TODO: Add fields for fingerprints, active proxy, etc.
 }
 
 // NewEngine creates a new core engine.
 func NewEngine() (*Engine, error) {
+	// TODO: Load these from a config file.
+	fingerprints := []*config.Fingerprint{
+		{
+			ID:          "default_tcp_stdlib",
+			Description: "Default TCP with stdlib TLS 1.3",
+			Transport:   config.Transport{Protocol: "tcp"},
+			TLS:         config.TLS{Library: "stdlib", MinVersion: "1.3", MaxVersion: "1.3"},
+		},
+		{
+			ID:          "default_tcp_utls_chrome",
+			Description: "Default TCP with uTLS Chrome",
+			Transport:   config.Transport{Protocol: "tcp"},
+			TLS:         config.TLS{Library: "utls", ClientHelloID: "HelloChrome_Auto", MinVersion: "1.3", MaxVersion: "1.3"},
+		},
+	}
 	return &Engine{
-		ranker: ranker.NewRanker(),
+		ranker:       ranker.NewRanker(),
+		fingerprints: fingerprints,
 	}, nil
 }
 
@@ -76,9 +93,9 @@ func (e *Engine) Status() (string, error) {
 	return "Proxy stopped", nil
 }
 
-// TestStrategies tests a list of fingerprints and returns the ranked results.
-func (e *Engine) TestStrategies(ctx context.Context, fingerprints []*config.Fingerprint) ([]ranker.StrategyResult, error) {
-	return e.ranker.TestAndRank(ctx, fingerprints)
+// TestStrategies tests all available fingerprints and returns the ranked results.
+func (e *Engine) TestStrategies(ctx context.Context) ([]ranker.StrategyResult, error) {
+	return e.ranker.TestAndRank(ctx, e.fingerprints)
 }
 
 // StartProxyWithStrategy starts a SOCKS5 proxy using a specific fingerprint.
@@ -143,4 +160,30 @@ func (e *Engine) createDialerForStrategy(fp *config.Fingerprint) (proxy.CustomDi
 	}
 
 	return fullDialer, nil
+}
+
+// GetBestStrategy tests all available strategies and returns the best one.
+func (e *Engine) GetBestStrategy(ctx context.Context) (*config.Fingerprint, error) {
+	results, err := e.ranker.TestAndRank(ctx, e.fingerprints)
+	if err != nil {
+		return nil, fmt.Errorf("failed to test and rank strategies: %w", err)
+	}
+
+	for _, res := range results {
+		if res.Success {
+			return res.Fingerprint, nil
+		}
+	}
+
+	return nil, fmt.Errorf("no successful strategy found")
+}
+
+// GetStrategyByID returns a strategy fingerprint by its ID.
+func (e *Engine) GetStrategyByID(id string) (*config.Fingerprint, error) {
+	for _, fp := range e.fingerprints {
+		if fp.ID == id {
+			return fp, nil
+		}
+	}
+	return nil, fmt.Errorf("strategy with ID '%s' not found", id)
 }
