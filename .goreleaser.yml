@@ -1,0 +1,39 @@
+before:
+  hooks:
+    - go mod tidy
+builds:
+  - id: "gocircum-cli"
+    main: ./cli
+    binary: gocircum-cli
+    goos:
+      - linux
+      - windows
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+archives:
+  - id: "gocircum-cli"
+    builds:
+      - "gocircum-cli"
+    format: tar.gz
+    name_template: >-
+      {{ .ProjectName }}_
+      {{- .Version }}_
+      {{- .Os }}_
+      {{- .Arch }}
+checksum:
+  name_template: 'checksums.txt'
+snapshot:
+  name_template: "{{ incpatch .Version }}-next"
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - '^docs:'
+      - '^test:'
+release:
+  github:
+    owner: your-repo-owner
+    name: gocircum
+  prerelease: auto 

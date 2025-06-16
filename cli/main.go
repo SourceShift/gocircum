@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"gocircum"
 	"gocircum/core/config"
-	"log"
+	"gocircum/pkg/logging"
 	"os"
 	"os/signal"
 	"syscall"
@@ -14,8 +14,18 @@ import (
 )
 
 func main() {
+	// Manually parse global flags for logging, as they are needed before subcommands.
+	var logLevel, logFormat string
+	fs := flag.NewFlagSet("global", flag.ContinueOnError)
+	fs.StringVar(&logLevel, "log-level", "info", "Log level (debug, info, warn, error)")
+	fs.StringVar(&logFormat, "log-format", "console", "Log format (console, json)")
+	// Ignore errors, we'll just use defaults if flags are not there.
+	_ = fs.Parse(os.Args)
+
+	logging.InitLogger(logLevel, logFormat)
+
 	if len(os.Args) < 2 {
-		fmt.Println("expected 'proxy' or 'test' subcommands")
+		logging.GetLogger().Error("expected 'proxy' or 'test' subcommands")
 		os.Exit(1)
 	}
 
@@ -25,59 +35,73 @@ func main() {
 		addr := proxyCmd.String("addr", "127.0.0.1:1080", "proxy listen address")
 		strategyID := proxyCmd.String("strategy", "", "Specific strategy ID to use. If not provided, the best ranked strategy will be used.")
 		configFile := proxyCmd.String("config", "strategies.yaml", "Path to the strategies YAML file.")
+		// Add logging flags to help text, but they are handled globally.
+		proxyCmd.String("log-level", "info", "Log level (debug, info, warn, error)")
+		proxyCmd.String("log-format", "console", "Log format (console, json)")
 		if err := proxyCmd.Parse(os.Args[2:]); err != nil {
-			log.Fatalf("Failed to parse proxy flags: %v", err)
+			logging.GetLogger().Error("Failed to parse proxy flags", "error", err)
+			os.Exit(1)
 		}
 		runProxy(*addr, *strategyID, *configFile)
 
 	case "test":
 		testCmd := flag.NewFlagSet("test", flag.ExitOnError)
 		configFile := testCmd.String("config", "strategies.yaml", "Path to the strategies YAML file.")
+		// Add logging flags to help text, but they are handled globally.
+		testCmd.String("log-level", "info", "Log level (debug, info, warn, error)")
+		testCmd.String("log-format", "console", "Log format (console, json)")
 		if err := testCmd.Parse(os.Args[2:]); err != nil {
-			log.Fatalf("Failed to parse test flags: %v", err)
+			logging.GetLogger().Error("Failed to parse test flags", "error", err)
+			os.Exit(1)
 		}
 		runTest(*configFile)
 
 	default:
-		fmt.Println("expected 'proxy' or 'test' subcommands")
+		logging.GetLogger().Error("expected 'proxy' or 'test' subcommands", "command", os.Args[1])
 		os.Exit(1)
 	}
 }
 
 func runProxy(addr string, strategyID string, configFile string) {
-	fmt.Printf("Starting proxy on %s...\n", addr)
+	logger := logging.GetLogger()
+	logger.Info("Starting proxy...", "address", addr)
 
-	fingerprints, err := config.LoadFingerprintsFromFile(configFile)
+	fingerprintStructs, err := config.LoadFingerprintsFromFile(configFile)
 	if err != nil {
-		log.Fatalf("Failed to load strategies: %v", err)
+		logger.Error("Failed to load strategies", "error", err)
+		os.Exit(1)
 	}
-	engine, err := gocircum.NewEngine(fingerprints)
+	engine, err := gocircum.NewEngine(fingerprintStructs, logger)
 	if err != nil {
-		log.Fatalf("Failed to create core engine: %v", err)
+		logger.Error("Failed to create core engine", "error", err)
+		os.Exit(1)
 	}
 
 	var fp *config.Fingerprint
 	if strategyID != "" {
-		fmt.Printf("Using specified strategy: %s\n", strategyID)
+		logger.Info("Using specified strategy", "strategy_id", strategyID)
 		fp, err = engine.GetStrategyByID(strategyID)
 		if err != nil {
-			log.Fatalf("Failed to get strategy: %v", err)
+			logger.Error("Failed to get strategy", "error", err)
+			os.Exit(1)
 		}
 	} else {
-		fmt.Println("No strategy specified, selecting the best one...")
+		logger.Info("No strategy specified, selecting the best one...")
 		fp, err = engine.GetBestStrategy(context.Background())
 		if err != nil {
-			log.Fatalf("Failed to get best strategy: %v", err)
+			logger.Error("Failed to get best strategy", "error", err)
+			os.Exit(1)
 		}
-		fmt.Printf("Selected strategy: %s (%s)\n", fp.ID, fp.Description)
+		logger.Info("Selected strategy", "id", fp.ID, "description", fp.Description)
 	}
 
 	// Start the proxy. This is a non-blocking call.
 	if err := engine.StartProxyWithStrategy(context.Background(), addr, fp); err != nil {
-		log.Fatalf("Proxy failed to start: %v", err)
+		logger.Error("Proxy failed to start", "error", err)
+		os.Exit(1)
 	}
 
-	fmt.Println("Proxy started. Press Ctrl+C to exit.")
+	logger.Info("Proxy started. Press Ctrl+C to exit.")
 
 	// Wait for a shutdown signal
 	sigCh := make(chan os.Signal, 1)
@@ -85,28 +109,32 @@ func runProxy(addr string, strategyID string, configFile string) {
 
 	<-sigCh
 
-	fmt.Println("\nReceived shutdown signal, stopping proxy...")
+	logger.Info("\nReceived shutdown signal, stopping proxy...")
 	if err := engine.Stop(); err != nil {
-		log.Printf("Error stopping proxy: %v", err)
+		logger.Error("Error stopping proxy", "error", err)
 	}
-	fmt.Println("Proxy stopped.")
+	logger.Info("Proxy stopped.")
 }
 
 func runTest(configFile string) {
-	fmt.Println("Testing all strategies...")
+	logger := logging.GetLogger()
+	logger.Info("Testing all strategies...")
 
-	fingerprints, err := config.LoadFingerprintsFromFile(configFile)
+	fingerprintStructs, err := config.LoadFingerprintsFromFile(configFile)
 	if err != nil {
-		log.Fatalf("Failed to load strategies: %v", err)
+		logger.Error("Failed to load strategies", "error", err)
+		os.Exit(1)
 	}
-	engine, err := gocircum.NewEngine(fingerprints)
+	engine, err := gocircum.NewEngine(fingerprintStructs, logger)
 	if err != nil {
-		log.Fatalf("Failed to create core engine: %v", err)
+		logger.Error("Failed to create core engine", "error", err)
+		os.Exit(1)
 	}
 
 	results, err := engine.TestStrategies(context.Background())
 	if err != nil {
-		log.Fatalf("Failed to test strategies: %v", err)
+		logger.Error("Failed to test strategies", "error", err)
+		os.Exit(1)
 	}
 
 	// Print results in a nice table format.

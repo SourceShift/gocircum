@@ -94,27 +94,33 @@ func main() {
 The behavior of `gocircum` is controlled by `strategies.yaml`. Here is an example snippet:
 
 ```yaml
-strategies:
-  - name: "chrome-on-quic"
-    enabled: true
-    transport:
-      protocol: "quic"
-    tls:
-      library: "uquic"
-      client_hello_id: "HelloChrome_Auto"
-
-  - name: "firefox-fragmented"
-    enabled: true
+fingerprints:
+  - id: "default_tcp_utls_chrome"
+    description: "Default TCP with uTLS Chrome"
     transport:
       protocol: "tcp"
-      middleware:
-        - name: "fragment"
-          params:
-            packet_sizes: [10, 20, 15]
-            delay_ms: 5
+    tls:
+      library: "utls"
+      client_hello_id: "HelloChrome_Auto"
+      min_version: "1.3"
+      max_version: "1.3"
+      skip_verify: false
+
+  - id: "tcp_fragment_utls_firefox"
+    description: "TCP with fragmentation and uTLS Firefox"
+    transport:
+      protocol: "tcp"
+      fragmentation:
+        packet_sizes:
+          - [10, 20]
+          - [30, 50]
+        delay_ms: [5, 15]
     tls:
       library: "utls"
       client_hello_id: "HelloFirefox_Auto"
+      min_version: "1.3"
+      max_version: "1.3"
+      skip_verify: false
 ```
 
 ## Platform Support

@@ -4,7 +4,7 @@ GOBUILD=$(GOCMD) build
 GOCLEAN=$(GOCMD) clean
 GOTEST=$(GOCMD) test
 GOMOD=$(GOCMD) mod
-GOMOBILE=$(GOCMD) get golang.org/x/mobile/cmd/gomobile@latest && $(GOCMD) mod init gocircum && gomobile init
+GOMOBILE=gomobile
 GOLINT=golangci-lint
 
 # Project paths
