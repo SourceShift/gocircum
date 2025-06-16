@@ -1,8 +1,0 @@
-strategies:
-  - name: "bad_protocol"
-    enabled: true
-    transport:
-      protocol: "udp"
-    tls:
-      library: "utls"
-      client_hello_id: "HelloChrome_Auto" 
