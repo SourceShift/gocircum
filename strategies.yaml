@@ -1,0 +1,34 @@
+strategies:
+  - id: "default_tcp_stdlib"
+    description: "Default TCP with stdlib TLS 1.3"
+    transport:
+      protocol: "tcp"
+    tls:
+      library: "stdlib"
+      min_version: "1.3"
+      max_version: "1.3"
+
+  - id: "default_tcp_utls_chrome"
+    description: "Default TCP with uTLS Chrome"
+    transport:
+      protocol: "tcp"
+    tls:
+      library: "utls"
+      client_hello_id: "HelloChrome_Auto"
+      min_version: "1.3"
+      max_version: "1.3"
+
+  - id: "tcp_fragment_utls_firefox"
+    description: "TCP with fragmentation and uTLS Firefox"
+    transport:
+      protocol: "tcp"
+      fragmentation:
+        packet_sizes:
+          - [10, 20]
+          - [30, 50]
+        delay_ms: [5, 15]
+    tls:
+      library: "utls"
+      client_hello_id: "HelloFirefox_Auto"
+      min_version: "1.3"
+      max_version: "1.3" 

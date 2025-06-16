@@ -24,18 +24,19 @@ func main() {
 		proxyCmd := flag.NewFlagSet("proxy", flag.ExitOnError)
 		addr := proxyCmd.String("addr", "127.0.0.1:1080", "proxy listen address")
 		strategyID := proxyCmd.String("strategy", "", "Specific strategy ID to use. If not provided, the best ranked strategy will be used.")
+		configFile := proxyCmd.String("config", "strategies.yaml", "Path to the strategies YAML file.")
 		if err := proxyCmd.Parse(os.Args[2:]); err != nil {
 			log.Fatalf("Failed to parse proxy flags: %v", err)
 		}
-		runProxy(*addr, *strategyID)
+		runProxy(*addr, *strategyID, *configFile)
 
 	case "test":
 		testCmd := flag.NewFlagSet("test", flag.ExitOnError)
-		// TODO: Add flag for config file path
+		configFile := testCmd.String("config", "strategies.yaml", "Path to the strategies YAML file.")
 		if err := testCmd.Parse(os.Args[2:]); err != nil {
 			log.Fatalf("Failed to parse test flags: %v", err)
 		}
-		runTest()
+		runTest(*configFile)
 
 	default:
 		fmt.Println("expected 'proxy' or 'test' subcommands")
@@ -43,9 +44,14 @@ func main() {
 	}
 }
 
-func runProxy(addr string, strategyID string) {
+func runProxy(addr string, strategyID string, configFile string) {
 	fmt.Printf("Starting proxy on %s...\n", addr)
-	engine, err := core.NewEngine()
+
+	fingerprints, err := config.LoadFingerprintsFromFile(configFile)
+	if err != nil {
+		log.Fatalf("Failed to load strategies: %v", err)
+	}
+	engine, err := core.NewEngine(fingerprints)
 	if err != nil {
 		log.Fatalf("Failed to create core engine: %v", err)
 	}
@@ -86,9 +92,14 @@ func runProxy(addr string, strategyID string) {
 	fmt.Println("Proxy stopped.")
 }
 
-func runTest() {
+func runTest(configFile string) {
 	fmt.Println("Testing all strategies...")
-	engine, err := core.NewEngine()
+
+	fingerprints, err := config.LoadFingerprintsFromFile(configFile)
+	if err != nil {
+		log.Fatalf("Failed to load strategies: %v", err)
+	}
+	engine, err := core.NewEngine(fingerprints)
 	if err != nil {
 		log.Fatalf("Failed to create core engine: %v", err)
 	}

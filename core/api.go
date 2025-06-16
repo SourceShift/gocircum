@@ -21,22 +21,10 @@ type Engine struct {
 	// TODO: Add fields for fingerprints, active proxy, etc.
 }
 
-// NewEngine creates a new core engine.
-func NewEngine() (*Engine, error) {
-	// TODO: Load these from a config file.
-	fingerprints := []*config.Fingerprint{
-		{
-			ID:          "default_tcp_stdlib",
-			Description: "Default TCP with stdlib TLS 1.3",
-			Transport:   config.Transport{Protocol: "tcp"},
-			TLS:         config.TLS{Library: "stdlib", MinVersion: "1.3", MaxVersion: "1.3"},
-		},
-		{
-			ID:          "default_tcp_utls_chrome",
-			Description: "Default TCP with uTLS Chrome",
-			Transport:   config.Transport{Protocol: "tcp"},
-			TLS:         config.TLS{Library: "utls", ClientHelloID: "HelloChrome_Auto", MinVersion: "1.3", MaxVersion: "1.3"},
-		},
+// NewEngine creates a new core engine with a given set of fingerprints.
+func NewEngine(fingerprints []*config.Fingerprint) (*Engine, error) {
+	if len(fingerprints) == 0 {
+		return nil, fmt.Errorf("engine must be initialized with at least one fingerprint")
 	}
 	return &Engine{
 		ranker:       ranker.NewRanker(),
