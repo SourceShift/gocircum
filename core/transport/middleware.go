@@ -5,6 +5,8 @@ import (
 	"log"
 	"net"
 	"time"
+
+	"golang.org/x/time/rate"
 )
 
 // Chain creates a single Middleware from a series of middlewares.
@@ -128,4 +130,27 @@ func RetryMiddleware(attempts int, delay time.Duration) Middleware {
 	}
 }
 
-// TODO: Implement ThrottlingMiddleware for rate limiting.
+// throttlingTransport is a transport wrapper that rate limits dial attempts.
+type throttlingTransport struct {
+	Transport
+	limiter *rate.Limiter
+}
+
+// DialContext waits for a token from the rate limiter before dialing.
+func (t *throttlingTransport) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
+	if err := t.limiter.Wait(ctx); err != nil {
+		return nil, err
+	}
+	return t.Transport.DialContext(ctx, network, address)
+}
+
+// ThrottlingMiddleware creates a middleware for rate limiting dial attempts.
+func ThrottlingMiddleware(r rate.Limit, b int) Middleware {
+	limiter := rate.NewLimiter(r, b)
+	return func(base Transport) Transport {
+		return &throttlingTransport{
+			Transport: base,
+			limiter:   limiter,
+		}
+	}
+}

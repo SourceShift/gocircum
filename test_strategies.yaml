@@ -1,9 +1,10 @@
-strategies:
+fingerprints:
   - id: "test_tcp_stdlib"
     description: "Test TCP with stdlib TLS 1.3"
     transport:
       protocol: "tcp"
     tls:
-      library: "stdlib"
+      library: "go-stdlib"
       min_version: "1.3"
-      max_version: "1.3" 
+      max_version: "1.3"
+      skip_verify: true 

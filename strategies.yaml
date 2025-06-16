@@ -1,4 +1,4 @@
-strategies:
+fingerprints:
   - id: "default_tcp_stdlib"
     description: "Default TCP with stdlib TLS 1.3"
     transport:
@@ -7,6 +7,7 @@ strategies:
       library: "stdlib"
       min_version: "1.3"
       max_version: "1.3"
+      skip_verify: false
 
   - id: "default_tcp_utls_chrome"
     description: "Default TCP with uTLS Chrome"
@@ -17,6 +18,7 @@ strategies:
       client_hello_id: "HelloChrome_Auto"
       min_version: "1.3"
       max_version: "1.3"
+      skip_verify: false
 
   - id: "tcp_fragment_utls_firefox"
     description: "TCP with fragmentation and uTLS Firefox"
@@ -31,4 +33,5 @@ strategies:
       library: "utls"
       client_hello_id: "HelloFirefox_Auto"
       min_version: "1.3"
-      max_version: "1.3" 
+      max_version: "1.3"
+      skip_verify: false 

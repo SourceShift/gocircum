@@ -2,7 +2,9 @@ package transport
 
 import (
 	"context"
+	"errors"
 	"net"
+	"time"
 )
 
 // Transport is the interface for network transports.
@@ -20,10 +22,17 @@ type Transport interface {
 type Middleware func(transport Transport) Transport
 
 // Config is a placeholder for common configuration options.
-// TODO: Expand with common options like timeouts.
-type Config struct{}
+type Config struct {
+	DialTimeout  time.Duration
+	ReadTimeout  time.Duration
+	WriteTimeout time.Duration
+}
 
 // Factory is a function that creates a new Transport with the given config.
 type Factory func(cfg *Config) (Transport, error)
 
-// TODO: Define specific transport-related error types here.
+// Custom error types for the transport layer.
+var (
+	ErrTimeout   = &net.DNSError{Err: "i/o timeout", IsTimeout: true}
+	ErrHandshake = errors.New("handshake failed")
+)

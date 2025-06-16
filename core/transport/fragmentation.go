@@ -2,6 +2,7 @@ package transport
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"time"
 )
@@ -24,7 +25,7 @@ func (c *fragmentingConn) Write(b []byte) (n int, err error) {
 
 		sent, err := c.Conn.Write(b[:chunkSize])
 		if err != nil {
-			return totalSent + sent, err
+			return totalSent + sent, fmt.Errorf("fragmented write failed: %w", err)
 		}
 
 		totalSent += sent
@@ -48,7 +49,7 @@ type fragmentingTransport struct {
 func (t *fragmentingTransport) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
 	conn, err := t.Transport.DialContext(ctx, network, address)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("dial for fragmentation failed: %w", err)
 	}
 	return &fragmentingConn{
 		Conn:          conn,

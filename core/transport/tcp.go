@@ -3,6 +3,8 @@ package transport
 import (
 	"context"
 	"crypto/tls"
+	"fmt"
+	"gocircum/pkg/logging"
 	"net"
 	"time"
 )
@@ -38,7 +40,7 @@ func NewTCPTransport(cfg *TCPConfig) (*TCPTransport, error) {
 func (t *TCPTransport) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
 	conn, err := t.dialer.DialContext(ctx, network, address)
 	if err != nil {
-		return nil, err // TODO: Wrap error
+		return nil, fmt.Errorf("tcp dial failed: %w", err)
 	}
 
 	if t.tlsConfig != nil {
@@ -48,6 +50,7 @@ func (t *TCPTransport) DialContext(ctx context.Context, network, address string)
 		if err != nil {
 			// If SplitHostPort fails, it might be because the port is missing.
 			// In that case, the address itself is likely the host.
+			logging.GetLogger().Warn("could not split host/port, falling back to using address as host", "address", address, "error", err)
 			host = address
 		}
 
@@ -59,7 +62,7 @@ func (t *TCPTransport) DialContext(ctx context.Context, network, address string)
 		tlsConn := tls.Client(conn, clientTLSConfig)
 		if err := tlsConn.HandshakeContext(ctx); err != nil {
 			_ = conn.Close()
-			return nil, err // TODO: Wrap error
+			return nil, fmt.Errorf("tls handshake failed: %w", err)
 		}
 		return tlsConn, nil
 	}
@@ -73,14 +76,58 @@ func (t *TCPTransport) Listen(ctx context.Context, network, address string) (net
 	var lc net.ListenConfig
 	ln, err := lc.Listen(ctx, network, address)
 	if err != nil {
-		return nil, err // TODO: wrap error
+		return nil, fmt.Errorf("tcp listen failed: %w", err)
 	}
+
+	// Wrap the listener to respect context cancellation for Accept() calls.
+	wrapper := newTCPListenerWrapper(ctx, ln)
 
 	if t.tlsConfig != nil {
-		return tls.NewListener(ln, t.tlsConfig), nil
+		return tls.NewListener(wrapper, t.tlsConfig), nil
 	}
 
-	return ln, nil
+	return wrapper, nil
+}
+
+// tcpListenerWrapper wraps a net.Listener to make its Accept method cancellable.
+type tcpListenerWrapper struct {
+	net.Listener
+	ctx context.Context
+}
+
+// newTCPListenerWrapper creates a new wrapper and starts a goroutine to close
+// the listener when the context is done.
+func newTCPListenerWrapper(ctx context.Context, l net.Listener) *tcpListenerWrapper {
+	lw := &tcpListenerWrapper{
+		Listener: l,
+		ctx:      ctx,
+	}
+
+	go func() {
+		<-ctx.Done()
+		// Closing the listener will cause the blocking Accept() call to return an error.
+		_ = lw.Listener.Close()
+	}()
+
+	return lw
+}
+
+// Accept waits for and returns the next connection to the listener.
+// It will unblock and return an error if the listener's context is cancelled.
+func (l *tcpListenerWrapper) Accept() (net.Conn, error) {
+	conn, err := l.Listener.Accept()
+	if err != nil {
+		// If the context was cancelled, this error is expected.
+		// We check the context's error to provide a more specific reason.
+		select {
+		case <-l.ctx.Done():
+			return nil, l.ctx.Err()
+		default:
+			// The error was not due to context cancellation.
+			return nil, fmt.Errorf("accept failed: %w", err)
+		}
+	}
+	return conn, nil
 }
 
 // Close is a no-op for TCPTransport as it doesn't hold persistent resources itself.

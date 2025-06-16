@@ -3,6 +3,7 @@ package transport
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"time"
 
@@ -37,13 +38,13 @@ func NewQUICTransport(cfg *QUICConfig) (*QUICTransport, error) {
 func (t *QUICTransport) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
 	conn, err := quic.DialAddr(ctx, address, t.tlsConfig, t.quicConfig)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("quic dial failed: %w", err)
 	}
 
 	stream, err := conn.OpenStreamSync(ctx)
 	if err != nil {
 		_ = conn.CloseWithError(0, "")
-		return nil, err
+		return nil, fmt.Errorf("quic open stream failed: %w", err)
 	}
 
 	return &quicConn{Stream: stream, conn: conn}, nil
@@ -53,7 +54,7 @@ func (t *QUICTransport) DialContext(ctx context.Context, network, address string
 func (t *QUICTransport) Listen(ctx context.Context, network, address string) (net.Listener, error) {
 	l, err := quic.ListenAddr(address, t.tlsConfig, t.quicConfig)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("quic listen failed: %w", err)
 	}
 	return &quicListenerWrapper{listener: l, ctx: ctx}, nil
 }
@@ -73,13 +74,25 @@ type quicListenerWrapper struct {
 func (l *quicListenerWrapper) Accept() (net.Conn, error) {
 	conn, err := l.listener.Accept(l.ctx)
 	if err != nil {
-		return nil, err
+		// Check if the error is due to context cancellation.
+		select {
+		case <-l.ctx.Done():
+			return nil, l.ctx.Err()
+		default:
+			return nil, fmt.Errorf("quic accept failed: %w", err)
+		}
 	}
 
 	stream, err := conn.AcceptStream(l.ctx)
 	if err != nil {
+		// If accepting the stream fails, we should also check for context cancellation.
 		_ = conn.CloseWithError(0, "")
-		return nil, err
+		select {
+		case <-l.ctx.Done():
+			return nil, l.ctx.Err()
+		default:
+			return nil, fmt.Errorf("quic accept stream failed: %w", err)
+		}
 	}
 	return &quicConn{Stream: stream, conn: conn}, nil
 }
@@ -103,11 +116,16 @@ type quicConn struct {
 // Close closes the stream and the underlying QUIC connection.
 func (c *quicConn) Close() error {
 	err := c.Stream.Close()
-	err2 := c.conn.CloseWithError(0, "closing")
 	if err != nil {
-		return err
+		// Try to close the connection anyway.
+		_ = c.conn.CloseWithError(0, "closing")
+		return fmt.Errorf("quic stream close failed: %w", err)
 	}
-	return err2
+	err2 := c.conn.CloseWithError(0, "closing")
+	if err2 != nil {
+		return fmt.Errorf("quic conn close failed: %w", err2)
+	}
+	return nil
 }
 
 func (c *quicConn) LocalAddr() net.Addr {

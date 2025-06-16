@@ -8,12 +8,15 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"errors"
 	"io"
 	"math/big"
 	"net"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
 )
 
 func TestTCPTransport_Dial(t *testing.T) {
@@ -220,4 +223,83 @@ func generateTestCert() (certPEM, keyPEM []byte, err error) {
 	keyBuf := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(priv)})
 
 	return certBuf, keyBuf, nil
+}
+
+func TestTCPTransport_DialContext_ErrorWrapping(t *testing.T) {
+	// Use a non-routable address to force a dial error.
+	nonRoutableAddress := "192.0.2.1:1234"
+	tcpTransport, err := NewTCPTransport(&TCPConfig{
+		DialTimeout: time.Millisecond * 10,
+	})
+	assert.NoError(t, err)
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*50)
+	defer cancel()
+
+	_, err = tcpTransport.DialContext(ctx, "tcp", nonRoutableAddress)
+
+	assert.Error(t, err)
+
+	// Check if the underlying error is a net.OpError, which is what DialContext usually returns on timeout.
+	var opErr *net.OpError
+	assert.True(t, errors.As(err, &opErr), "error should be a net.OpError")
+	assert.True(t, opErr.Timeout(), "OpError should be a timeout")
+}
+
+func TestTCPTransport_Listen_ErrorWrapping(t *testing.T) {
+	// Use a privileged port to force a listen error.
+	privilegedAddress := "127.0.0.1:80"
+	tcpTransport, err := NewTCPTransport(&TCPConfig{})
+	assert.NoError(t, err)
+
+	_, err = tcpTransport.Listen(context.Background(), "tcp", privilegedAddress)
+	assert.Error(t, err)
+
+	// The underlying error should be a net.OpError for listen failures.
+	var opErr *net.OpError
+	assert.True(t, errors.As(err, &opErr), "error should be a net.OpError")
+}
+
+func TestTCPTransportListenContextCancellation(t *testing.T) {
+	transport, err := NewTCPTransport(&TCPConfig{})
+	assert.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	listener, err := transport.Listen(ctx, "tcp", "127.0.0.1:0")
+	assert.NoError(t, err)
+	defer listener.Close()
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+
+	var acceptErr error
+	go func() {
+		defer wg.Done()
+		_, acceptErr = listener.Accept()
+	}()
+
+	// Give the goroutine a moment to block on Accept()
+	time.Sleep(100 * time.Millisecond)
+
+	// Cancel the context, which should unblock Accept()
+	cancel()
+
+	wg.Wait()
+
+	assert.Error(t, acceptErr, "Accept should return an error after context cancellation")
+	assert.True(t, errors.Is(acceptErr, context.Canceled) || errors.Is(acceptErr, net.ErrClosed), "Error should be context.Canceled or net.ErrClosed")
+}
+
+func TestTCPTransportListen_AlreadyCancelledContext(t *testing.T) {
+	transport, err := NewTCPTransport(&TCPConfig{})
+	assert.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // Cancel context immediately
+
+	_, err = transport.Listen(ctx, "tcp", "127.0.0.1:0")
+	assert.Error(t, err, "Listen should fail if context is already cancelled")
+	assert.ErrorIs(t, err, context.Canceled, "Error should be context.Canceled")
 }
