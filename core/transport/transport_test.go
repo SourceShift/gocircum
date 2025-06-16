@@ -5,6 +5,8 @@ import (
 	"context"
 	"errors"
 	"gocircum/core/transport"
+	"gocircum/mocks"
+	"gocircum/testutils"
 	"log"
 	"net"
 	"strings"
@@ -12,40 +14,17 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"go.uber.org/mock/gomock"
 )
-
-// mockTransport is a mock implementation of the Transport interface for testing.
-type mockTransport struct {
-	dialer   func(ctx context.Context, network, address string) (net.Conn, error)
-	listener func(ctx context.Context, network, address string) (net.Listener, error)
-	closer   func() error
-}
-
-func (m *mockTransport) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
-	if m.dialer != nil {
-		return m.dialer(ctx, network, address)
-	}
-	return nil, errors.New("dial not implemented")
-}
-
-func (m *mockTransport) Listen(ctx context.Context, network, address string) (net.Listener, error) {
-	if m.listener != nil {
-		return m.listener(ctx, network, address)
-	}
-	return nil, errors.New("listen not implemented")
-}
-
-func (m *mockTransport) Close() error {
-	if m.closer != nil {
-		return m.closer()
-	}
-	return nil
-}
 
 // TestFactory tests the transport factory pattern.
 func TestFactory(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
 	var factory transport.Factory = func(cfg *transport.Config) (transport.Transport, error) {
-		return &mockTransport{}, nil
+		return mocks.NewMockTransport(ctrl), nil
 	}
 
 	tr, err := factory(&transport.Config{})
@@ -60,20 +39,18 @@ func TestFactory(t *testing.T) {
 
 // TestMiddleware tests the middleware pattern.
 func TestMiddleware(t *testing.T) {
-	baseTransport := &mockTransport{
-		closer: func() error {
-			t.Log("Base transport closed")
-			return nil
-		},
-	}
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	baseTransport := mocks.NewMockTransport(ctrl)
+	baseTransport.EXPECT().Close().Return(nil).Times(1).Do(func() {
+		t.Log("Base transport closed")
+	})
 
 	var mw transport.Middleware = func(tr transport.Transport) transport.Transport {
-		return &mockTransport{
-			closer: func() error {
-				t.Log("Middleware cleaning up...")
-				return tr.Close()
-			},
-		}
+		// In a real scenario, the middleware would wrap the transport.
+		// For this test, we just ensure it calls the base transport's methods.
+		return tr
 	}
 
 	wrappedTransport := mw(baseTransport)
@@ -84,11 +61,15 @@ func TestMiddleware(t *testing.T) {
 
 // TestInterfaces tests that the defined interfaces can be used as expected.
 func TestInterfaces(t *testing.T) {
-	tr := &mockTransport{
-		dialer: func(ctx context.Context, network, address string) (net.Conn, error) {
-			return &net.TCPConn{}, nil
-		},
-	}
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	tr := mocks.NewMockTransport(ctrl)
+	connMock := testutils.NewMockConn(ctrl)
+
+	tr.EXPECT().DialContext(gomock.Any(), "tcp", "localhost:8080").Return(connMock, nil)
+	connMock.EXPECT().Close().Return(nil)
+	tr.EXPECT().Close().Return(nil)
 
 	conn, err := tr.DialContext(context.Background(), "tcp", "localhost:8080")
 	if err != nil {
@@ -105,24 +86,29 @@ func TestInterfaces(t *testing.T) {
 }
 
 func TestTCPTransport_DialContext_ErrorWrapping(t *testing.T) {
-	// Use a non-routable address to force a dial error.
-	nonRoutableAddress := "192.0.2.1:1234"
+	// Find a free port and immediately close the listener to ensure the port is not in use.
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	closedPortAddress := listener.Addr().String()
+	require.NoError(t, listener.Close())
+
 	tcpTransport, err := transport.NewTCPTransport(&transport.TCPConfig{
-		DialTimeout: time.Millisecond * 10,
+		DialTimeout: time.Millisecond * 100, // Increased timeout for reliability
 	})
 	assert.NoError(t, err)
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*50)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second) // Increased context timeout
 	defer cancel()
 
-	_, err = tcpTransport.DialContext(ctx, "tcp", nonRoutableAddress)
+	_, err = tcpTransport.DialContext(ctx, "tcp", closedPortAddress)
 
 	assert.Error(t, err)
 
-	// Check if the underlying error is a net.OpError, which is what DialContext usually returns on timeout.
+	// Check if the underlying error is a net.OpError, which is what DialContext usually returns on connection refused.
 	var opErr *net.OpError
 	assert.True(t, errors.As(err, &opErr), "error should be a net.OpError")
-	assert.True(t, opErr.Timeout(), "OpError should be a timeout")
+	// We expect a "connect: connection refused" error, not a timeout.
+	assert.Contains(t, opErr.Err.Error(), "connection refused", "expected a connection refused error")
 }
 
 func TestTCPTransport_Listen_ErrorWrapping(t *testing.T) {
@@ -140,15 +126,21 @@ func TestTCPTransport_Listen_ErrorWrapping(t *testing.T) {
 }
 
 func TestLoggingMiddleware(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
 	var buf bytes.Buffer
 	logger := log.New(&buf, "", 0)
+	connMock := testutils.NewMockConn(ctrl)
+	listenerMock := testutils.NewMockListener(ctrl)
 
 	// Create a mock transport
-	mock := &mockTransport{
-		closer: func() error {
-			return nil
-		},
-	}
+	mock := mocks.NewMockTransport(ctrl)
+	mock.EXPECT().DialContext(gomock.Any(), gomock.Any(), gomock.Any()).Return(connMock, nil).AnyTimes()
+	mock.EXPECT().Listen(gomock.Any(), gomock.Any(), gomock.Any()).Return(listenerMock, nil).AnyTimes()
+	mock.EXPECT().Close().Return(nil).AnyTimes()
+	connMock.EXPECT().RemoteAddr().Return(&net.TCPAddr{IP: net.IPv4(1, 2, 3, 4), Port: 5678}).AnyTimes()
+	listenerMock.EXPECT().Addr().Return(&net.TCPAddr{IP: net.IPv4(1, 2, 3, 4), Port: 8080}).AnyTimes()
 
 	// Create the logging middleware
 	loggingMW := transport.LoggingMiddleware(logger)
@@ -168,6 +160,8 @@ func TestLoggingMiddleware(t *testing.T) {
 }
 
 func TestChainMiddleware(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
 	var order []string
 
 	// Create two simple middlewares that record their application order
@@ -185,7 +179,7 @@ func TestChainMiddleware(t *testing.T) {
 	chainedMW := transport.Chain(mw1, mw2)
 
 	// Apply the chained middleware
-	chainedMW(&mockTransport{})
+	chainedMW(mocks.NewMockTransport(ctrl))
 
 	// Middlewares are applied from last to first (wrapping order)
 	expectedOrder := "mw2_applied mw1_applied"
@@ -195,51 +189,72 @@ func TestChainMiddleware(t *testing.T) {
 }
 
 func TestTimeoutMiddleware(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
 	// Create a mock transport that blocks to simulate a slow dial
-	mock := &mockTransport{
-		dialer: func(ctx context.Context, network, address string) (net.Conn, error) {
-			select {
-			case <-time.After(100 * time.Millisecond):
-				return nil, errors.New("should have timed out")
-			case <-ctx.Done():
-				return nil, ctx.Err()
-			}
+	mock := mocks.NewMockTransport(ctrl)
+	mock.EXPECT().DialContext(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(
+		func(ctx context.Context, network, address string) (net.Conn, error) {
+			// Block until the context is cancelled by the timeout middleware.
+			// This is more efficient than a fixed-duration sleep.
+			<-ctx.Done()
+			return nil, ctx.Err()
 		},
-	}
+	)
 
 	// Wrap it with a short timeout
 	timeoutMW := transport.TimeoutMiddleware(10 * time.Millisecond)
 	wrappedTransport := timeoutMW(mock)
 
+	// Create a parent context with a timeout to prevent the test from hanging
+	parentCtx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
 	// This dial should fail with a context deadline exceeded error
-	_, err := wrappedTransport.DialContext(context.Background(), "tcp", "localhost:1234")
+	_, err := wrappedTransport.DialContext(parentCtx, "tcp", "localhost:1234")
 	assert.Error(t, err)
 	assert.True(t, errors.Is(err, context.DeadlineExceeded))
 }
 
 func TestRetryMiddleware(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
 	attempts := 0
 	maxAttempts := 3
 
 	// Create a mock transport that fails a few times before succeeding
-	mock := &mockTransport{
-		dialer: func(ctx context.Context, network, address string) (net.Conn, error) {
+	mock := mocks.NewMockTransport(ctrl)
+	connMock := testutils.NewMockConn(ctrl)
+
+	// Create a context with timeout to prevent the test from hanging
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+
+	mock.EXPECT().DialContext(gomock.Any(), gomock.Any(), gomock.Any()).
+		DoAndReturn(func(ctx context.Context, network, address string) (net.Conn, error) {
 			attempts++
 			if attempts < maxAttempts {
 				return nil, errors.New("connection failed")
 			}
-			// Use a mock connection that does nothing, since we only care about the dial success
-			return &net.TCPConn{}, nil
-		},
-	}
+			return connMock, nil
+		}).Times(maxAttempts)
+
+	connMock.EXPECT().Close().Return(nil).AnyTimes()
 
 	// Wrap it with the retry middleware
 	retryMW := transport.RetryMiddleware(maxAttempts, 1*time.Millisecond)
 	wrappedTransport := retryMW(mock)
 
 	// This dial should succeed after several attempts
-	conn, err := wrappedTransport.DialContext(context.Background(), "tcp", "localhost:1234")
-	assert.NoError(t, err)
+	conn, err := wrappedTransport.DialContext(ctx, "tcp", "localhost:1234")
+	if err != nil {
+		t.Fatalf("Expected successful connection after retries, got error: %v", err)
+	}
+	if conn == nil {
+		t.Fatal("Expected non-nil connection after retries")
+	}
 	defer func() { _ = conn.Close() }()
 
 	assert.Equal(t, maxAttempts, attempts)

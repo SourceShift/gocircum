@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"sync"
 	"testing"
 	"time"
 
@@ -26,48 +27,11 @@ const TestTimeout = 5 * time.Second
 // TestInterval is the default interval for polling in tests.
 const TestInterval = 100 * time.Millisecond
 
-// MockEchoServer is a simple TCP server that echoes back any data it receives.
-type MockEchoServer struct {
-	listener net.Listener
-	addr     string
-}
-
-// NewMockEchoServer creates and starts a new MockEchoServer.
-func NewMockEchoServer() *MockEchoServer {
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		panic(err)
-	}
-	s := &MockEchoServer{
-		listener: listener,
-		addr:     listener.Addr().String(),
-	}
-	go s.run()
-	return s
-}
-
-func (s *MockEchoServer) run() {
-	for {
-		conn, err := s.listener.Accept()
-		if err != nil {
-			return // Listener was closed
-		}
-		go func(c net.Conn) {
-			defer c.Close()
-			_, _ = io.Copy(c, c)
-		}(conn)
-	}
-}
-
-// Addr returns the address of the server.
-func (s *MockEchoServer) Addr() string {
-	return s.addr
-}
-
-// Close stops the server.
-func (s *MockEchoServer) Close() {
-	s.listener.Close()
-}
+var (
+	testCert     tls.Certificate
+	testCertErr  error
+	testCertOnce sync.Once
+)
 
 // MockTLSEchoServer is a simple TLS server that echoes back any data it receives.
 type MockTLSEchoServer struct {
@@ -78,7 +42,7 @@ type MockTLSEchoServer struct {
 
 // NewMockTLSEchoServer creates and starts a new MockTLSEchoServer.
 func NewMockTLSEchoServer() *MockTLSEchoServer {
-	cert, err := generateTestCert()
+	cert, err := getTestCert()
 	if err != nil {
 		panic(err)
 	}
@@ -119,6 +83,14 @@ func (s *MockTLSEchoServer) Addr() string {
 // Close stops the server.
 func (s *MockTLSEchoServer) Close() {
 	s.listener.Close()
+}
+
+// getTestCert returns a cached test certificate, generating it only once.
+func getTestCert() (tls.Certificate, error) {
+	testCertOnce.Do(func() {
+		testCert, testCertErr = generateTestCert()
+	})
+	return testCert, testCertErr
 }
 
 // generateTestCert creates a self-signed certificate for testing.
@@ -191,4 +163,12 @@ func CheckSOCKS5Proxy(proxyAddr, targetAddr string) error {
 func AssertConnectedToProxy(t *testing.T, proxyAddr, targetAddr string) {
 	err := CheckSOCKS5Proxy(proxyAddr, targetAddr)
 	require.NoError(t, err, "Failed to connect to target through SOCKS5 proxy")
+}
+
+// AssertEventuallyConnectedToProxy polls until a connection to the target through the SOCKS5 proxy can be established.
+func AssertEventuallyConnectedToProxy(t *testing.T, proxyAddr, targetAddr string) {
+	t.Helper()
+	require.Eventually(t, func() bool {
+		return CheckSOCKS5Proxy(proxyAddr, targetAddr) == nil
+	}, TestTimeout, TestInterval, "Timed out waiting for proxy connection")
 }
