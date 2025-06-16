@@ -26,7 +26,7 @@ State-level censorship systems use Deep Packet Inspection (DPI) to identify and 
 
 - **Core Circumvention Library (`gocircum`)**: A self-contained, headless Go library that provides all core functionality. It can be easily imported into other Go projects.
 - **YAML-based Strategy Configuration**: Define and enable different transport protocols (`tcp`, `quic`), TLS libraries (`go-stdlib`, `utls`, `uquic`), and middlewares (like packet fragmentation) in a simple text file.
-- **Command-Line Interface (`heybabe-cli`)**: A feature-rich CLI for technical users.
+- **Command-Line Interface (`gocircum-cli`)**: A feature-rich CLI for technical users.
     - `test`: Run all enabled strategies and report on their success and performance.
     - `proxy`: Start a local SOCKS5 proxy using the best available strategy.
 - **Automated Best-Strategy Selection**: A built-in "Ranker" module silently tests strategies to find the fastest, most reliable one for the user's current network conditions.
@@ -37,8 +37,8 @@ State-level censorship systems use Deep Packet Inspection (DPI) to identify and 
 
 `gocircum` is designed for two main groups:
 
-1.  **Students, Activists, and Citizens (like "Parisa")**: Individuals in censored regions who need a simple, reliable tool that just works. For them, `gocircum` powers easy-to-use mobile apps with a single "Connect" button.
-2.  **Researchers and Developers (like "Kian")**: Technical users who analyze censorship and need a powerful, scriptable tool to probe networks, test new evasion techniques, and build custom circumvention tools.
+1.  **Students, Activists, and Citizens**: Individuals in censored regions who need a simple, reliable tool that just works. For them, `gocircum` powers easy-to-use mobile apps with a single "Connect" button.
+2.  **Researchers and Developers**: Technical users who analyze censorship and need a powerful, scriptable tool to probe networks, test new evasion techniques, and build custom circumvention tools.
 
 ## Getting Started
 
@@ -46,15 +46,17 @@ State-level censorship systems use Deep Packet Inspection (DPI) to identify and 
 
 - Go (latest version recommended)
 
-### Installing the CLI (`heybabe-cli`)
+### Installing the CLI (`gocircum-cli`)
 
 ```bash
 # Clone the repository
 git clone https://github.com/your-repo/gocircum.git
-cd gocircum/cmd/heybabe-cli
+cd gocircum/cli
 
 # Build and install
-go install
+go build -o gocircum-cli
+# Optional: Move the binary to your system's PATH
+# sudo mv gocircum-cli /usr/local/bin/
 ```
 
 ### Using the Library
@@ -69,22 +71,63 @@ go get -u github.com/your-repo/gocircum
 package main
 
 import (
+	"context"
 	"fmt"
-	"github.com/your-repo/gocircum/pkg/core"
+	"os"
+	"os/signal"
+	"syscall"
+
+	"github.com/your-repo/gocircum"
+	"github.com/your-repo/gocircum/core/config"
+	"github.com/your-repo/gocircum/pkg/logging"
 )
 
 func main() {
-	// Example: Initialize and start the gocircum engine
-	// (Note: API is illustrative and subject to change)
-	engine, err := core.NewEngine("path/to/strategies.yaml")
+	// Initialize a logger
+	logger := logging.GetLogger()
+
+	// Load fingerprints from the configuration file
+	fingerprints, err := config.LoadFingerprintsFromFile("strategies.yaml")
 	if err != nil {
+		logger.Error("Failed to load fingerprints", "error", err)
 		panic(err)
 	}
 
-	statusChan := engine.Start()
+	// Create a new engine instance
+	engine, err := gocircum.NewEngine(fingerprints, logger)
+	if err != nil {
+		logger.Error("Failed to create engine", "error", err)
+		panic(err)
+	}
 
-	for status := range statusChan {
-		fmt.Println("Engine status:", status)
+	// Example: Test all available strategies
+	fmt.Println("Testing strategies...")
+	results, err := engine.TestStrategies(context.Background())
+	if err != nil {
+		logger.Error("Failed to test strategies", "error", err)
+	} else {
+		for _, r := range results {
+			fmt.Printf("  - ID: %s, Success: %v, Latency: %s\n", r.Fingerprint.ID, r.Success, r.Latency)
+		}
+	}
+
+	// Start the proxy in the background
+	fmt.Println("Starting proxy on 127.0.0.1:1080...")
+	go func() {
+		if err := engine.Start("127.0.0.1:1080"); err != nil {
+			logger.Error("Engine failed to start", "error", err)
+		}
+	}()
+
+	// Wait for a shutdown signal
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	<-sigCh
+
+	// Stop the engine gracefully
+	fmt.Println("Shutting down...")
+	if err := engine.Stop(); err != nil {
+		logger.Error("Failed to stop engine gracefully", "error", err)
 	}
 }
 ```
