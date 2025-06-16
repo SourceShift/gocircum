@@ -2,6 +2,7 @@ package gocircum
 
 import (
 	"gocircum/core"
+	"gocircum/core/config"
 	"gocircum/interfaces"
 )
 
@@ -10,9 +11,14 @@ type Engine struct {
 	coreEngine *core.Engine
 }
 
-// NewEngine creates a new instance of the circumvention engine.
-func NewEngine() (interfaces.Engine, error) {
-	coreEngine, err := core.NewEngine()
+// NewEngine creates a new instance of the circumvention engine from a config file.
+func NewEngine(configPath string) (interfaces.Engine, error) {
+	fingerprints, err := config.LoadFingerprintsFromFile(configPath)
+	if err != nil {
+		return nil, err
+	}
+
+	coreEngine, err := core.NewEngine(fingerprints)
 	if err != nil {
 		return nil, err
 	}

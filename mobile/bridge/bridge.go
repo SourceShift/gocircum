@@ -3,6 +3,7 @@ package bridge
 
 import (
 	"context"
+	"encoding/json"
 	"gocircum/core"
 	"gocircum/core/config"
 	"log"
@@ -16,6 +17,11 @@ var (
 	cancel context.CancelFunc
 )
 
+// fileConfig is the top-level structure for the JSON configuration.
+type fileConfig struct {
+	Fingerprints []*config.Fingerprint `json:"strategies"`
+}
+
 // StatusUpdater is an interface that native mobile code must implement
 // to receive status updates from the Go library.
 type StatusUpdater interface {
@@ -26,15 +32,25 @@ type StatusUpdater interface {
 
 // StartEngine initializes and starts the circumvention engine.
 // It finds the best strategy and starts a SOCKS5 proxy.
-// configJSON is a placeholder for future use.
+// configJSON should be a JSON string with the same structure as the strategies.yaml file.
 func StartEngine(configJSON string, updater StatusUpdater) {
 	if engine != nil {
 		updater.OnStatusUpdate("ERROR", "Engine already started")
 		return
 	}
 
+	var cfg fileConfig
+	if err := json.Unmarshal([]byte(configJSON), &cfg); err != nil {
+		updater.OnStatusUpdate("ERROR", "Failed to parse config JSON: "+err.Error())
+		return
+	}
+	if len(cfg.Fingerprints) == 0 {
+		updater.OnStatusUpdate("ERROR", "No strategies found in the provided configuration.")
+		return
+	}
+
 	var err error
-	engine, err = core.NewEngine()
+	engine, err = core.NewEngine(cfg.Fingerprints)
 	if err != nil {
 		updater.OnStatusUpdate("ERROR", "Failed to create engine: "+err.Error())
 		return
@@ -42,23 +58,7 @@ func StartEngine(configJSON string, updater StatusUpdater) {
 
 	updater.OnStatusUpdate("CONNECTING", "Finding the best strategy...")
 
-	// TODO: Load fingerprints from configJSON instead of hardcoding.
-	fingerprints := []*config.Fingerprint{
-		{
-			ID:          "default_tcp_stdlib",
-			Description: "Default TCP with stdlib TLS 1.3",
-			Transport:   config.Transport{Protocol: "tcp"},
-			TLS:         config.TLS{Library: "stdlib", MinVersion: "1.3", MaxVersion: "1.3"},
-		},
-		{
-			ID:          "default_tcp_utls_chrome",
-			Description: "Default TCP with uTLS Chrome",
-			Transport:   config.Transport{Protocol: "tcp"},
-			TLS:         config.TLS{Library: "utls", ClientHelloID: "HelloChrome_Auto", MinVersion: "1.3", MaxVersion: "1.3"},
-		},
-	}
-
-	results, err := engine.TestStrategies(context.Background(), fingerprints)
+	results, err := engine.TestStrategies(context.Background())
 	if err != nil {
 		updater.OnStatusUpdate("ERROR", "Failed to test strategies: "+err.Error())
 		return
