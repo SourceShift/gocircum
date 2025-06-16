@@ -22,11 +22,11 @@ func main() {
 	case "proxy":
 		proxyCmd := flag.NewFlagSet("proxy", flag.ExitOnError)
 		addr := proxyCmd.String("addr", "127.0.0.1:1080", "proxy listen address")
-		// TODO: Add flag for specific strategy ID and load it.
+		strategyID := proxyCmd.String("strategy", "", "Specific strategy ID to use. If not provided, the best ranked strategy will be used.")
 		if err := proxyCmd.Parse(os.Args[2:]); err != nil {
 			log.Fatalf("Failed to parse proxy flags: %v", err)
 		}
-		runProxy(*addr)
+		runProxy(*addr, *strategyID)
 
 	case "test":
 		testCmd := flag.NewFlagSet("test", flag.ExitOnError)
@@ -42,26 +42,27 @@ func main() {
 	}
 }
 
-func runProxy(addr string) {
+func runProxy(addr string, strategyID string) {
 	fmt.Printf("Starting proxy on %s...\n", addr)
 	engine, err := core.NewEngine()
 	if err != nil {
 		log.Fatalf("Failed to create core engine: %v", err)
 	}
 
-	// TODO: This should load the best strategy from the ranker.
-	// For now, using a placeholder default strategy.
-	fp := &config.Fingerprint{
-		ID:          "default_placeholder",
-		Description: "Default TCP with stdlib TLS 1.3",
-		Transport: config.Transport{
-			Protocol: "tcp",
-		},
-		TLS: config.TLS{
-			Library:    "stdlib",
-			MinVersion: "1.3",
-			MaxVersion: "1.3",
-		},
+	var fp *config.Fingerprint
+	if strategyID != "" {
+		fmt.Printf("Using specified strategy: %s\n", strategyID)
+		fp, err = engine.GetStrategyByID(strategyID)
+		if err != nil {
+			log.Fatalf("Failed to get strategy: %v", err)
+		}
+	} else {
+		fmt.Println("No strategy specified, selecting the best one...")
+		fp, err = engine.GetBestStrategy(context.Background())
+		if err != nil {
+			log.Fatalf("Failed to get best strategy: %v", err)
+		}
+		fmt.Printf("Selected strategy: %s (%s)\n", fp.ID, fp.Description)
 	}
 
 	// Start the proxy. This is a non-blocking call.
@@ -91,24 +92,7 @@ func runTest() {
 		log.Fatalf("Failed to create core engine: %v", err)
 	}
 
-	// TODO: Load fingerprints from YAML files.
-	// For now, using a placeholder default strategy.
-	fingerprints := []*config.Fingerprint{
-		{
-			ID:          "default_tcp_stdlib",
-			Description: "Default TCP with stdlib TLS 1.3",
-			Transport:   config.Transport{Protocol: "tcp"},
-			TLS:         config.TLS{Library: "stdlib", MinVersion: "1.3", MaxVersion: "1.3"},
-		},
-		{
-			ID:          "default_tcp_utls_chrome",
-			Description: "Default TCP with uTLS Chrome",
-			Transport:   config.Transport{Protocol: "tcp"},
-			TLS:         config.TLS{Library: "utls", ClientHelloID: "HelloChrome_Auto", MinVersion: "1.3", MaxVersion: "1.3"},
-		},
-	}
-
-	results, err := engine.TestStrategies(context.Background(), fingerprints)
+	results, err := engine.TestStrategies(context.Background())
 	if err != nil {
 		log.Fatalf("Failed to test strategies: %v", err)
 	}
