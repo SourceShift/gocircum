@@ -4,7 +4,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"gocircum/core"
+	"gocircum"
 	"gocircum/core/config"
 	"log"
 	"os"
@@ -51,7 +51,7 @@ func runProxy(addr string, strategyID string, configFile string) {
 	if err != nil {
 		log.Fatalf("Failed to load strategies: %v", err)
 	}
-	engine, err := core.NewEngine(fingerprints)
+	engine, err := gocircum.NewEngine(fingerprints)
 	if err != nil {
 		log.Fatalf("Failed to create core engine: %v", err)
 	}
@@ -99,7 +99,7 @@ func runTest(configFile string) {
 	if err != nil {
 		log.Fatalf("Failed to load strategies: %v", err)
 	}
-	engine, err := core.NewEngine(fingerprints)
+	engine, err := gocircum.NewEngine(fingerprints)
 	if err != nil {
 		log.Fatalf("Failed to create core engine: %v", err)
 	}

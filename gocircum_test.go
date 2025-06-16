@@ -2,6 +2,7 @@ package gocircum_test
 
 import (
 	"gocircum"
+	"gocircum/core/config"
 	"os"
 	"testing"
 )
@@ -13,7 +14,12 @@ func TestEngineLifecycle(t *testing.T) {
 		t.Skip("test_strategies.yaml not found, skipping lifecycle test.")
 	}
 
-	engine, err := gocircum.NewEngine("test_strategies.yaml")
+	fingerprints, err := config.LoadFingerprintsFromFile("test_strategies.yaml")
+	if err != nil {
+		t.Fatalf("Failed to load test fingerprints: %v", err)
+	}
+
+	engine, err := gocircum.NewEngine(fingerprints)
 	if err != nil {
 		t.Fatalf("Failed to create engine: %v", err)
 	}
@@ -22,7 +28,7 @@ func TestEngineLifecycle(t *testing.T) {
 	// This makes it an integration test, not a unit test.
 	// For now, we'll just check that it doesn't return an immediate error.
 	// A proper integration test would require a test server.
-	if err := engine.Start(); err != nil {
+	if err := engine.Start("127.0.0.1:1080"); err != nil {
 		t.Errorf("Engine failed to start: %v", err)
 	}
 
@@ -47,7 +53,11 @@ func TestCanBeImported(t *testing.T) {
 	if _, err := os.Stat("test_strategies.yaml"); os.IsNotExist(err) {
 		t.Skip("test_strategies.yaml not found, skipping import test.")
 	}
-	_, err := gocircum.NewEngine("test_strategies.yaml")
+	fingerprints, err := config.LoadFingerprintsFromFile("test_strategies.yaml")
+	if err != nil {
+		t.Fatalf("Failed to load test fingerprints: %v", err)
+	}
+	_, err = gocircum.NewEngine(fingerprints)
 	if err != nil {
 		t.Fatalf("gocircum library could not be initialized in a test context: %v", err)
 	}

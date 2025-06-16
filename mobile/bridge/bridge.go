@@ -4,15 +4,16 @@ package bridge
 import (
 	"context"
 	"encoding/json"
-	"gocircum/core"
+	"gocircum"
 	"gocircum/core/config"
+	"gocircum/interfaces"
 	"log"
 	// TODO: Need a way to load configs. For now, they are hardcoded.
 )
 
 var (
 	// engine is a single, global instance of the core engine.
-	engine *core.Engine
+	engine interfaces.Engine
 	// cancel is a function to stop the running proxy.
 	cancel context.CancelFunc
 )
@@ -50,7 +51,7 @@ func StartEngine(configJSON string, updater StatusUpdater) {
 	}
 
 	var err error
-	engine, err = core.NewEngine(cfg.Fingerprints)
+	engine, err = gocircum.NewEngine(cfg.Fingerprints)
 	if err != nil {
 		updater.OnStatusUpdate("ERROR", "Failed to create engine: "+err.Error())
 		return
