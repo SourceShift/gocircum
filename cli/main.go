@@ -4,7 +4,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"gocircum"
+	"gocircum/core"
 	"gocircum/core/config"
 	"gocircum/pkg/logging"
 	"os"
@@ -22,7 +22,7 @@ func main() {
 	// Ignore errors, we'll just use defaults if flags are not there.
 	_ = fs.Parse(os.Args)
 
-	logging.InitLogger(logLevel, logFormat)
+	logging.InitLogger(logLevel, logFormat, nil)
 
 	if len(os.Args) < 2 {
 		logging.GetLogger().Error("expected 'proxy' or 'test' subcommands")
@@ -62,72 +62,67 @@ func main() {
 	}
 }
 
-func runProxy(addr string, strategyID string, configFile string) {
-	logger := logging.GetLogger()
-	logger.Info("Starting proxy...", "address", addr)
+func runProxy(addr, strategyID, configFile string) {
+	logger := logging.GetLogger().With("component", "proxy-runner")
 
-	fingerprintStructs, err := config.LoadFingerprintsFromFile(configFile)
+	fingerprints, err := config.LoadFingerprintsFromFile(configFile)
 	if err != nil {
-		logger.Error("Failed to load strategies", "error", err)
-		os.Exit(1)
-	}
-	engine, err := gocircum.NewEngine(fingerprintStructs, logger)
-	if err != nil {
-		logger.Error("Failed to create core engine", "error", err)
+		logger.Error("Failed to load config", "error", err)
 		os.Exit(1)
 	}
 
-	var fp *config.Fingerprint
+	engine, err := core.NewEngine(fingerprints, logger)
+	if err != nil {
+		logger.Error("Failed to create engine", "error", err)
+		os.Exit(1)
+	}
+
+	var strategy *config.Fingerprint
 	if strategyID != "" {
-		logger.Info("Using specified strategy", "strategy_id", strategyID)
-		fp, err = engine.GetStrategyByID(strategyID)
+		strategy, err = engine.GetStrategyByID(strategyID)
 		if err != nil {
-			logger.Error("Failed to get strategy", "error", err)
+			logger.Error("Failed to get strategy", "id", strategyID, "error", err)
 			os.Exit(1)
 		}
 	} else {
-		logger.Info("No strategy specified, selecting the best one...")
-		fp, err = engine.GetBestStrategy(context.Background())
+		logger.Info("No strategy specified, finding the best one...")
+		strategy, err = engine.GetBestStrategy(context.Background())
 		if err != nil {
 			logger.Error("Failed to get best strategy", "error", err)
 			os.Exit(1)
 		}
-		logger.Info("Selected strategy", "id", fp.ID, "description", fp.Description)
 	}
 
-	// Start the proxy. This is a non-blocking call.
-	if err := engine.StartProxyWithStrategy(context.Background(), addr, fp); err != nil {
-		logger.Error("Proxy failed to start", "error", err)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	if err := engine.StartProxyWithStrategy(ctx, addr, strategy); err != nil {
+		logger.Error("Failed to start proxy", "error", err)
 		os.Exit(1)
 	}
 
-	logger.Info("Proxy started. Press Ctrl+C to exit.")
-
-	// Wait for a shutdown signal
+	// Wait for termination signal
 	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
-
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	<-sigCh
 
-	logger.Info("\nReceived shutdown signal, stopping proxy...")
+	logger.Info("Shutting down...")
 	if err := engine.Stop(); err != nil {
-		logger.Error("Error stopping proxy", "error", err)
+		logger.Error("Failed to stop engine gracefully", "error", err)
 	}
-	logger.Info("Proxy stopped.")
 }
 
 func runTest(configFile string) {
-	logger := logging.GetLogger()
-	logger.Info("Testing all strategies...")
-
-	fingerprintStructs, err := config.LoadFingerprintsFromFile(configFile)
+	logger := logging.GetLogger().With("component", "test-runner")
+	fingerprints, err := config.LoadFingerprintsFromFile(configFile)
 	if err != nil {
-		logger.Error("Failed to load strategies", "error", err)
+		logger.Error("Failed to load config", "error", err)
 		os.Exit(1)
 	}
-	engine, err := gocircum.NewEngine(fingerprintStructs, logger)
+
+	engine, err := core.NewEngine(fingerprints, logger)
 	if err != nil {
-		logger.Error("Failed to create core engine", "error", err)
+		logger.Error("Failed to create engine", "error", err)
 		os.Exit(1)
 	}
 
@@ -137,19 +132,14 @@ func runTest(configFile string) {
 		os.Exit(1)
 	}
 
-	// Print results in a nice table format.
-	w := tabwriter.NewWriter(os.Stdout, 0, 0, 3, ' ', tabwriter.Debug)
-	fmt.Fprintln(w, "ID\tDESCRIPTION\tSTATUS\tLATENCY")
-	fmt.Fprintln(w, "--\t-----------\t------\t-------")
-
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, 3, ' ', 0)
+	fmt.Fprintln(w, "ID\tSUCCESS\tLATENCY\tDESCRIPTION")
 	for _, res := range results {
 		status := "FAIL"
-		latency := "N/A"
 		if res.Success {
-			status = "SUCCESS"
-			latency = res.Latency.String()
+			status = "OK"
 		}
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", res.Fingerprint.ID, res.Fingerprint.Description, status, latency)
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", res.Fingerprint.ID, status, res.Latency, res.Fingerprint.Description)
 	}
 	w.Flush()
 }
