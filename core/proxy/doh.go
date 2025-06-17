@@ -67,12 +67,16 @@ var createClientForProvider = func(provider config.DoHProvider) (*http.Client, e
 		KeepAlive: 10 * time.Second,
 	}
 
-	tlsConfig := &tls.Config{ServerName: provider.ServerName}
+	// If a front domain is specified, use it for the TLS SNI. Otherwise, use the server name.
+	// This enables domain fronting for DoH requests.
+	sni := provider.ServerName
+	if provider.FrontDomain != "" {
+		sni = provider.FrontDomain
+	}
+
+	tlsConfig := &tls.Config{ServerName: sni}
 	if provider.RootCA != "" {
 		caCertPool := x509.NewCertPool()
-		// FAIL-SAFE: If the provided RootCA is invalid, we MUST NOT proceed.
-		// A failure to append means the PEM data is malformed. Proceeding would
-		// bypass the intended certificate pinning, creating a security vulnerability.
 		if ok := caCertPool.AppendCertsFromPEM([]byte(provider.RootCA)); !ok {
 			return nil, fmt.Errorf("failed to parse provided RootCA for DoH provider '%s'", provider.Name)
 		}
@@ -154,6 +158,10 @@ func (r *DoHResolver) Resolve(ctx context.Context, name string) (context.Context
 			continue
 		}
 		req.Header.Set("Accept", "application/dns-json")
+		// The Host header must be set to the actual DoH server.
+		// In a normal request, this matches the SNI.
+		// When fronting, the SNI is the front_domain, but the Host header (inside TLS)
+		// must still be the real DoH server. So we always set it to ServerName.
 		if provider.ServerName != "" {
 			req.Host = provider.ServerName
 		}

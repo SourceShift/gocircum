@@ -112,9 +112,10 @@ type TLS struct {
 
 // DoHProvider holds the configuration for a single DNS-over-HTTPS provider.
 type DoHProvider struct {
-	Name       string   `yaml:"name"`
-	URL        string   `yaml:"url"`
-	ServerName string   `yaml:"server_name"`
-	Bootstrap  []string `yaml:"bootstrap"`
-	RootCA     string   `yaml:"root_ca,omitempty"`
+	Name        string   `yaml:"name"`
+	URL         string   `yaml:"url"`
+	ServerName  string   `yaml:"server_name"` // The real DoH server name, for the Host header.
+	Bootstrap   []string `yaml:"bootstrap"`   // IPs of the FrontDomain, not the DoH server.
+	RootCA      string   `yaml:"root_ca,omitempty"`
+	FrontDomain string   `yaml:"front_domain,omitempty"` // The benign domain for TLS SNI.
 }
