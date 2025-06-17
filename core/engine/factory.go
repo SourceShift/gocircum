@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"crypto/x509"
 	"fmt"
 	"gocircum/core/config"
 	"gocircum/core/constants"
@@ -15,6 +16,13 @@ import (
 	utls "github.com/refraction-networking/utls"
 )
 
+var PopularUserAgents = []string{
+	"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+	"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+	"Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0",
+	"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4.1 Safari/605.1.15",
+}
+
 //go:generate mockgen -package=mocks -destination=../../mocks/mock_dialer_factory.go gocircum/core/engine DialerFactory
 
 // Dialer is a function that can establish a network connection.
@@ -26,32 +34,34 @@ type DialerFactory interface {
 }
 
 // DefaultDialerFactory is the default implementation of DialerFactory.
-type DefaultDialerFactory struct{}
+type DefaultDialerFactory struct {
+	GetRootCAs func() *x509.CertPool
+}
 
 // NewDialer creates a new network dialer based on the transport configuration.
 // It returns a function that can be used to establish a connection.
 func (f *DefaultDialerFactory) NewDialer(transportCfg *config.Transport, tlsCfg *config.TLS) (Dialer, error) {
-	var dialer transport.Transport
+	var baseDialer transport.Transport
 
 	switch transportCfg.Protocol {
 	case "tcp":
-		stdLibTlsConfig, err := buildStdLibTLSConfig(tlsCfg)
+		stdLibTlsConfig, err := buildStdLibTLSConfig(tlsCfg, nil)
 		if err != nil {
 			return nil, fmt.Errorf("failed to build stdlib tls config: %w", err)
 		}
 
-		dialer, err = transport.NewTCPTransport(&transport.TCPConfig{
+		baseDialer, err = transport.NewTCPTransport(&transport.TCPConfig{
 			TLSConfig: stdLibTlsConfig,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("failed to create TCP transport: %w", err)
 		}
 	case "quic":
-		utlsConfig, err := buildQUICUTLSConfig(tlsCfg)
+		utlsConfig, err := buildQUICUTLSConfig(tlsCfg, nil)
 		if err != nil {
 			return nil, fmt.Errorf("failed to build uTLS config for QUIC: %w", err)
 		}
-		dialer, err = transport.NewQUICTransport(&transport.QUICConfig{
+		baseDialer, err = transport.NewQUICTransport(&transport.QUICConfig{
 			TLSConfig: utlsConfig,
 		})
 		if err != nil {
@@ -64,34 +74,138 @@ func (f *DefaultDialerFactory) NewDialer(transportCfg *config.Transport, tlsCfg 
 	// Wrap the dialer in fragmentation middleware if configured.
 	if transportCfg.Fragmentation != nil {
 		middleware := newFragmenter(transportCfg.Fragmentation)
-		dialer = middleware(dialer)
+		baseDialer = middleware(baseDialer)
 	}
 
-	return dialer.DialContext, nil
+	rawDialer := baseDialer.DialContext
+
+	// If TLS is configured, wrap the raw dialer in a TLS handshake.
+	if tlsCfg != nil && tlsCfg.Library != "" {
+		var rootCAs *x509.CertPool
+		if f.GetRootCAs != nil {
+			rootCAs = f.GetRootCAs()
+		}
+
+		return func(ctx context.Context, network, address string) (net.Conn, error) {
+			rawConn, err := rawDialer(ctx, network, address)
+			if err != nil {
+				return nil, err
+			}
+
+			// The SNI should be the host part of the address, unless overridden in the config.
+			sni := tlsCfg.ServerName
+			if sni == "" {
+				host, _, err := net.SplitHostPort(address)
+				if err != nil {
+					sni = address // Fallback to address if SplitHostPort fails
+				} else {
+					sni = host
+				}
+			}
+
+			return NewUTLSClient(rawConn, tlsCfg, sni, rootCAs)
+		}, nil
+	}
+
+	return rawDialer, nil
 }
 
-func buildStdLibTLSConfig(cfg *config.TLS) (*tls.Config, error) {
+func buildStdLibTLSConfig(cfg *config.TLS, rootCAs *x509.CertPool) (*tls.Config, error) {
+	if cfg == nil {
+		return nil, nil
+	}
 	return &tls.Config{
 		ServerName:         cfg.ServerName,
-		InsecureSkipVerify: cfg.InsecureSkipVerify,
+		InsecureSkipVerify: false,
+		RootCAs:            rootCAs,
 	}, nil
 }
 
-func buildQUICUTLSConfig(cfg *config.TLS) (*utls.Config, error) {
+func buildQUICUTLSConfig(cfg *config.TLS, rootCAs *x509.CertPool) (*utls.Config, error) {
+	if cfg == nil {
+		return nil, nil
+	}
 	minVersion, ok := constants.TLSVersionMap[cfg.MinVersion]
-	if !ok {
+	if !ok && cfg.MinVersion != "" {
 		return nil, fmt.Errorf("unknown min TLS version: %s", cfg.MinVersion)
 	}
 	maxVersion, ok := constants.TLSVersionMap[cfg.MaxVersion]
-	if !ok {
+	if !ok && cfg.MaxVersion != "" {
 		return nil, fmt.Errorf("unknown max TLS version: %s", cfg.MaxVersion)
+	}
+	if cfg.MinVersion == "" {
+		minVersion = utls.VersionTLS12
+	}
+	if cfg.MaxVersion == "" {
+		maxVersion = utls.VersionTLS13
 	}
 
 	return &utls.Config{
-		InsecureSkipVerify: cfg.InsecureSkipVerify,
+		InsecureSkipVerify: false,
 		MinVersion:         minVersion,
 		MaxVersion:         maxVersion,
+		RootCAs:            rootCAs,
 	}, nil
+}
+
+func BuildUTLSConfig(cfg *config.TLS, rootCAs *x509.CertPool) (*utls.Config, error) {
+	if cfg == nil {
+		return nil, nil
+	}
+	minVersion, ok := constants.TLSVersionMap[cfg.MinVersion]
+	if !ok && cfg.MinVersion != "" {
+		return nil, fmt.Errorf("unknown min TLS version: %s", cfg.MinVersion)
+	}
+	maxVersion, ok := constants.TLSVersionMap[cfg.MaxVersion]
+	if !ok && cfg.MaxVersion != "" {
+		return nil, fmt.Errorf("unknown max TLS version: %s", cfg.MaxVersion)
+	}
+	if cfg.MinVersion == "" {
+		minVersion = utls.VersionTLS12
+	}
+	if cfg.MaxVersion == "" {
+		maxVersion = utls.VersionTLS13
+	}
+
+	return &utls.Config{
+		ServerName:         cfg.ServerName,
+		InsecureSkipVerify: false,
+		MinVersion:         minVersion,
+		MaxVersion:         maxVersion,
+		RootCAs:            rootCAs,
+	}, nil
+}
+
+var clientHelloIDMap = map[string]utls.ClientHelloID{
+	"HelloChrome_Auto":       utls.HelloChrome_Auto,
+	"HelloFirefox_Auto":      utls.HelloFirefox_Auto,
+	"HelloIOS_Auto":          utls.HelloIOS_Auto,
+	"HelloAndroid_11_OkHttp": utls.HelloAndroid_11_OkHttp,
+	"Randomized":             utls.HelloRandomized,
+	"RandomizedNoALPN":       utls.HelloRandomizedNoALPN,
+}
+
+func NewUTLSClient(rawConn net.Conn, tlsCfg *config.TLS, sni string, customRootCAs *x509.CertPool) (net.Conn, error) {
+	utlsConfig, err := BuildUTLSConfig(tlsCfg, customRootCAs)
+	if err != nil {
+		return nil, fmt.Errorf("failed to build uTLS config: %w", err)
+	}
+	utlsConfig.ServerName = sni
+
+	helloID := utls.HelloRandomized
+	if tlsCfg.ClientHelloID != "" {
+		id, ok := clientHelloIDMap[tlsCfg.ClientHelloID]
+		if !ok {
+			return nil, fmt.Errorf("unknown or unsupported client hello ID: %s", tlsCfg.ClientHelloID)
+		}
+		helloID = id
+	}
+
+	uconn := utls.UClient(rawConn, utlsConfig, helloID)
+	if err := uconn.Handshake(); err != nil {
+		return nil, fmt.Errorf("uTLS handshake failed: %w", err)
+	}
+	return uconn, nil
 }
 
 // newFragmenter creates a middleware that fragments the initial data chunks (i.e. ClientHello)

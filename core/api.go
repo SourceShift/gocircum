@@ -4,26 +4,17 @@ import (
 	"bufio"
 	"context"
 	"crypto/rand"
+	"crypto/x509"
 	"fmt"
 	"gocircum/core/config"
 	"gocircum/core/engine"
 	"gocircum/core/proxy"
 	"gocircum/core/ranker"
 	"gocircum/pkg/logging"
-	"math/big"
 	"net"
 	"net/http"
-	"strings"
 	"sync"
-	"time"
 )
-
-var popularUserAgents = []string{
-	"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-	"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-	"Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0",
-	"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4.1 Safari/605.1.15",
-}
 
 // Engine is the main controller for the circumvention library.
 type Engine struct {
@@ -35,6 +26,7 @@ type Engine struct {
 	lastProxyError error
 	logger         logging.Logger
 	cancelProxy    context.CancelFunc
+	dialerFactory  *engine.DefaultDialerFactory
 }
 
 // NewEngine creates a new core engine with a given set of fingerprints.
@@ -60,6 +52,7 @@ func NewEngine(cfg *config.FileConfig, logger logging.Logger) (*Engine, error) {
 		config:         cfg,
 		proxyErrorChan: make(chan error, 1),
 		logger:         logger.With("component", "engine"),
+		dialerFactory:  &engine.DefaultDialerFactory{},
 	}, nil
 }
 
@@ -196,23 +189,21 @@ func (e *Engine) StartProxyWithStrategy(ctx context.Context, addr string, strate
 }
 
 // establishHTTPConnectTunnel sends a padded and fragmented HTTP CONNECT request to establish a tunnel.
-func establishHTTPConnectTunnel(conn net.Conn, covertTarget, finalDestination, userAgent string) error {
-	req, err := http.NewRequest("CONNECT", "http://"+finalDestination, nil)
+func establishHTTPConnectTunnel(conn net.Conn, target, host string, userAgent string) error {
+	req, err := http.NewRequest("CONNECT", "http://"+target, nil)
 	if err != nil {
 		return fmt.Errorf("failed to create CONNECT request: %w", err)
 	}
-	req.Host = covertTarget
+	req.Host = host
 	if userAgent == "" {
-		// Randomly select a popular User-Agent to avoid a static fingerprint.
-		n, err := rand.Int(rand.Reader, big.NewInt(int64(len(popularUserAgents))))
+		ua, err := getRandomUserAgent()
 		if err != nil {
-			// Fallback to the first one on the rare chance of a crypto/rand error.
-			userAgent = popularUserAgents[0]
-		} else {
-			userAgent = popularUserAgents[n.Int64()]
+			return fmt.Errorf("failed to get random user agent: %w", err)
 		}
+		req.Header.Set("User-Agent", ua)
+	} else {
+		req.Header.Set("User-Agent", userAgent)
 	}
-	req.Header.Set("User-Agent", userAgent)
 
 	// Add random padding headers to obfuscate the request size.
 	paddingHeaders, _ := engine.CryptoRandInt(2, 5)
@@ -221,34 +212,12 @@ func establishHTTPConnectTunnel(conn net.Conn, covertTarget, finalDestination, u
 		valBytes := make([]byte, 16)
 		_, _ = rand.Read(keyBytes)
 		_, _ = rand.Read(valBytes)
-		req.Header.Set(fmt.Sprintf("X-Padding-%x", keyBytes), fmt.Sprintf("%x", valBytes))
+		req.Header.Add(fmt.Sprintf("X-Padding-%x", keyBytes), fmt.Sprintf("%x", valBytes))
 	}
 
-	// Convert the request to bytes to be sent manually.
-	var buf strings.Builder
-	if err := req.Write(&buf); err != nil {
-		return fmt.Errorf("failed to buffer CONNECT request: %w", err)
-	}
-	requestBytes := []byte(buf.String())
-
-	// Fragment the request write to break the packet fingerprint.
-	offset := 0
-	for offset < len(requestBytes) {
-		maxChunk, _ := engine.CryptoRandInt(10, 50)
-		chunkSize := int(maxChunk)
-		if offset+chunkSize > len(requestBytes) {
-			chunkSize = len(requestBytes) - offset
-		}
-
-		if _, err := conn.Write(requestBytes[offset : offset+chunkSize]); err != nil {
-			return fmt.Errorf("failed to write fragmented CONNECT request: %w", err)
-		}
-		offset += chunkSize
-
-		if offset < len(requestBytes) {
-			delay, _ := engine.CryptoRandInt(5, 20)
-			time.Sleep(time.Duration(delay) * time.Millisecond)
-		}
+	err = req.Write(conn)
+	if err != nil {
+		return fmt.Errorf("failed to write CONNECT request: %w", err)
 	}
 
 	resp, err := http.ReadResponse(bufio.NewReader(conn), req)
@@ -258,76 +227,63 @@ func establishHTTPConnectTunnel(conn net.Conn, covertTarget, finalDestination, u
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("CONNECT request failed with status: %s", resp.Status)
+		return fmt.Errorf("proxy CONNECT request failed with status: %s", resp.Status)
 	}
 
 	return nil
 }
 
-// createDomainFrontingDialer handles the secure connection logic for domain fronting.
-func (e *Engine) createDomainFrontingDialer(fp *config.Fingerprint, baseDialer engine.Dialer) (proxy.CustomDialer, error) {
-	return func(ctx context.Context, network, finalDestination string) (net.Conn, error) {
-		frontHost, frontPort, err := net.SplitHostPort(fp.DomainFronting.FrontDomain)
-		if err != nil {
-			frontHost = fp.DomainFronting.FrontDomain
-			frontPort = "443" // Default HTTPS port
-		}
-
-		// Securely resolve fronting domain to an IP to prevent DNS leaks.
-		_, frontIP, err := e.ranker.DoHResolver.Resolve(ctx, frontHost)
-		if err != nil {
-			return nil, fmt.Errorf("securely resolving front domain %s failed: %w", frontHost, err)
-		}
-		dialAddr := net.JoinHostPort(frontIP.String(), frontPort)
-
-		// 1. Dial the front domain's IP address.
-		rawConn, err := baseDialer(ctx, network, dialAddr)
-		if err != nil {
-			return nil, fmt.Errorf("base dialer failed for front domain %s (%s): %w", frontHost, dialAddr, err)
-		}
-
-		// 2. Establish TLS with SNI set to the benign front domain.
-		tlsConn, err := engine.NewTLSClient(rawConn, &fp.TLS, frontHost, nil)
-		if err != nil {
-			rawConn.Close()
-			return nil, fmt.Errorf("tls client creation failed for front domain: %w", err)
-		}
-
-		// 3. Establish a CONNECT tunnel to the final destination through the fronted connection.
-		if err := establishHTTPConnectTunnel(tlsConn, fp.DomainFronting.CovertTarget, finalDestination, fp.TLS.UserAgent); err != nil {
-			tlsConn.Close()
-			return nil, fmt.Errorf("http connect tunnel failed: %w", err)
-		}
-
-		e.logger.Info("Domain fronting tunnel established", "final_destination", finalDestination)
-		return tlsConn, nil
-	}, nil
+// NewTLSClient is DEPRECATED. Use engine.NewUTLSClient instead.
+func (e *Engine) NewTLSClient(rawConn net.Conn, tlsCfg *config.TLS, sni string, customRootCAs *x509.CertPool) (net.Conn, error) {
+	return engine.NewUTLSClient(rawConn, tlsCfg, sni, customRootCAs)
 }
 
-// THIS FUNCTION HAS BEEN REMOVED.
-// There should be no code path that allows for direct, un-fronted connections
-// that leak the destination SNI. All connections must use a secure dialer
-// like the domain fronting dialer.
+// createDomainFrontingDialer handles the secure connection logic for domain fronting.
+func (e *Engine) createDomainFrontingDialer(fp *config.Fingerprint, dialer engine.Dialer) engine.Dialer {
+	return func(ctx context.Context, network, address string) (net.Conn, error) {
+		// The `address` parameter from the SOCKS5 client is ignored;
+		// we always connect to the fronting domain.
+		rawConn, err := dialer(ctx, network, fp.DomainFronting.FrontDomain)
+		if err != nil {
+			return nil, fmt.Errorf("failed to dial front domain %s: %w", fp.DomainFronting.FrontDomain, err)
+		}
 
-func (e *Engine) createDialerForStrategy(fp *config.Fingerprint) (proxy.CustomDialer, error) {
-	// 1. Create the base dialer (TCP or QUIC) without domain fronting logic.
-	dialerFactory := &engine.DefaultDialerFactory{}
-	baseDialer, err := dialerFactory.NewDialer(&fp.Transport, &fp.TLS)
+		// Now, wrap the raw connection with TLS and send the CONNECT request.
+		tlsConn, err := engine.NewUTLSClient(rawConn, &fp.TLS, fp.DomainFronting.FrontDomain, nil)
+		if err != nil {
+			rawConn.Close()
+			return nil, fmt.Errorf("failed to establish TLS with front domain: %w", err)
+		}
+
+		// The host header is what the proxy server sees, while the SNI is what the
+		// TLS terminator (e.g., a CDN) sees. For domain fronting, these must be different.
+		hostHeader := fp.DomainFronting.CovertTarget
+		if hostHeader == "" {
+			hostHeader = address
+		}
+		ua, _ := getRandomUserAgent()
+		err = establishHTTPConnectTunnel(tlsConn, address, hostHeader, ua)
+		if err != nil {
+			tlsConn.Close()
+			return nil, fmt.Errorf("failed to establish CONNECT tunnel: %w", err)
+		}
+		return tlsConn, nil
+	}
+}
+
+// createDialerForStrategy creates a base dialer from a fingerprint.
+func (e *Engine) createDialerForStrategy(fp *config.Fingerprint) (engine.Dialer, error) {
+	baseDialer, err := e.dialerFactory.NewDialer(&fp.Transport, &fp.TLS)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create base dialer: %w", err)
+		return nil, fmt.Errorf("failed to create base dialer for strategy %s: %w", fp.ID, err)
 	}
 
-	// 2. If domain fronting is enabled, wrap the base dialer.
+	// Wrap the dialer in a CONNECT tunnel if domain fronting is enabled
 	if fp.DomainFronting != nil && fp.DomainFronting.Enabled {
-		return e.createDomainFrontingDialer(fp, baseDialer)
+		return e.createDomainFrontingDialer(fp, baseDialer), nil
 	}
 
-	// 3. If no domain fronting, the dialer connects directly.
-	// This path is now strongly discouraged due to fingerprinting risks.
-	return func(ctx context.Context, network, addr string) (net.Conn, error) {
-		e.logger.Warn("SECURITY WARNING: Using a strategy without domain fronting. This is highly fingerprintable and not recommended.", "strategy_id", fp.ID)
-		return baseDialer(ctx, network, addr)
-	}, nil
+	return baseDialer, nil
 }
 
 // GetBestStrategy finds the best available strategy by testing and ranking them.
@@ -360,4 +316,35 @@ func (e *Engine) GetStrategyByID(id string) (*config.Fingerprint, error) {
 		}
 	}
 	return nil, fmt.Errorf("strategy with ID '%s' not found", id)
+}
+
+// NewProxyForStrategy creates a new proxy instance for a given strategy.
+// This is useful for creating multiple proxy instances. It is the caller's
+// responsibility to manage the lifecycle of the returned proxy.
+func (e *Engine) NewProxyForStrategy(ctx context.Context, listenAddr string, fp *config.Fingerprint, resolver *proxy.DoHResolver) (*proxy.Proxy, error) {
+	// 1. Create a custom dialer for the strategy
+	dialer, err := e.createDialerForStrategy(fp)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create dialer for strategy %s: %w", fp.ID, err)
+	}
+
+	// 2. Wrap the dialer in a CONNECT tunnel if domain fronting is enabled
+	if fp.DomainFronting != nil && fp.DomainFronting.Enabled {
+		dialer = e.createDomainFrontingDialer(fp, dialer)
+	}
+
+	// 3. Create the SOCKS5 proxy with the custom dialer and DoH resolver
+	proxyServer, err := proxy.New(listenAddr, dialer, resolver)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create proxy for strategy %s: %w", fp.ID, err)
+	}
+	return proxyServer, nil
+}
+
+func getRandomUserAgent() (string, error) {
+	uaIndex, err := engine.CryptoRandInt(0, len(engine.PopularUserAgents)-1)
+	if err != nil {
+		return "", fmt.Errorf("failed to get random user agent: %w", err)
+	}
+	return engine.PopularUserAgents[uaIndex], nil
 }

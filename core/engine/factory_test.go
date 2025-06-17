@@ -13,7 +13,7 @@ func TestBuildQUICUTLSConfig(t *testing.T) {
 			MinVersion: "1.2",
 			MaxVersion: "1.3",
 		}
-		utlsConfig, err := buildQUICUTLSConfig(cfg)
+		utlsConfig, err := buildQUICUTLSConfig(cfg, nil)
 		assert.NoError(t, err)
 		assert.False(t, utlsConfig.InsecureSkipVerify, "InsecureSkipVerify should be false by default")
 	})

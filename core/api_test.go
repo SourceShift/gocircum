@@ -3,8 +3,10 @@ package core
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"gocircum/core/config"
-	engine2 "gocircum/core/engine"
+	"gocircum/core/engine"
+	gengine "gocircum/core/engine"
 	"gocircum/core/proxy"
 	"gocircum/pkg/logging"
 	"gocircum/testserver"
@@ -227,9 +229,9 @@ func TestEngine_ProxyFailure(t *testing.T) {
 
 func TestEngine_GetBestStrategy(t *testing.T) {
 	// --- Setup mock HTTP server to act as the canary endpoint ---
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		io.WriteString(w, "ok")
+		_, _ = io.WriteString(w, "ok")
 	}))
 	defer server.Close()
 
@@ -245,38 +247,50 @@ func TestEngine_GetBestStrategy(t *testing.T) {
 		},
 		Transport: config.Transport{Protocol: "tcp"},
 		TLS: config.TLS{
-			Library:            "utls",
-			ClientHelloID:      "HelloChrome_Auto",
-			InsecureSkipVerify: true, // Needed for the httptest.Server's self-signed cert
+			Library:       "utls",
+			ClientHelloID: "HelloChrome_Auto",
 		},
 	}
+
+	// This is an invalid strategy that should fail because of an invalid ClientHelloID.
+	fpInvalid := config.Fingerprint{
+		ID:          "invalid-strategy",
+		Description: "An invalid strategy",
+		DomainFronting: &config.DomainFronting{
+			Enabled:      true,
+			FrontDomain:  "127.0.0.1:12345", // A port that is not listening
+			CovertTarget: "invalid.example.com",
+		},
+		Transport: config.Transport{Protocol: "tcp"},
+		TLS: config.TLS{
+			Library:       "utls",
+			ClientHelloID: "invalid-hello-id",
+		},
+	}
+
 	fileConfig := &config.FileConfig{
-		Fingerprints:  []config.Fingerprint{fp},
-		DoHProviders:  []config.DoHProvider{{Name: "dummy", URL: "https://1.2.3.4/dns-query"}},
+		Fingerprints:  []config.Fingerprint{fp, fpInvalid},
+		DoHProviders:  []config.DoHProvider{{Name: "dummy", URL: "https://1.2.3.4/dns-query", Bootstrap: []string{"1.2.3.4"}}},
 		CanaryDomains: []string{server.Listener.Addr().String()},
 	}
 
 	engine, err := NewEngine(fileConfig, logging.GetLogger())
-	require.NoError(t, err, "NewEngine should not return an error")
+	assert.NoError(t, err, "NewEngine should not return an error")
 
-	// Ensure resources are cleaned up after the test
-	t.Cleanup(func() {
-		if engine.activeProxy != nil {
-			_ = engine.Stop()
+	// Create a custom dialer factory for the ranker that trusts the test server's certs.
+	if engine.ranker != nil {
+		engine.ranker.DialerFactory = &gengine.DefaultDialerFactory{
+			GetRootCAs: func() *x509.CertPool {
+				return server.Client().Transport.(*http.Transport).TLSClientConfig.RootCAs
+			},
 		}
-	})
+	}
 
-	// --- Execute ---
-	// Add a timeout context to prevent hanging
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	best, err := engine.GetBestStrategy(ctx)
-
-	// --- Verify ---
-	require.NoError(t, err, "GetBestStrategy should succeed")
-	require.NotNil(t, best, "A best strategy should have been found")
-	assert.Equal(t, fp.ID, best.ID, "The best strategy should be our test strategy")
+	// --- Execute and Verify ---
+	best, err := engine.GetBestStrategy(context.Background())
+	assert.NoError(t, err, "GetBestStrategy should succeed")
+	assert.NotNil(t, best, "Best strategy should not be nil")
+	assert.Equal(t, "test-strategy-for-ranking", best.ID, "The best strategy should be the one that points to our test server")
 }
 
 func TestEngine_DomainFronting(t *testing.T) {
@@ -341,15 +355,8 @@ func TestEngine_DomainFronting(t *testing.T) {
 		DoHProviders:  []config.DoHProvider{{Name: "dummy", URL: "dummy"}},
 		CanaryDomains: []string{"example.com"},
 	}
-	engine, err := NewEngine(fileConfig, logging.GetLogger())
-	require.NoError(t, err, "NewEngine should not return an error")
-
-	// Ensure resources are cleaned up
-	t.Cleanup(func() {
-		if engine.activeProxy != nil {
-			_ = engine.Stop()
-		}
-	})
+	_, err = NewEngine(fileConfig, logging.GetLogger())
+	require.NoError(t, err)
 
 	// 3. Get the dialer and try to connect
 	// We need to create a custom dialer that uses the test server's cert pool.
@@ -365,13 +372,13 @@ func TestEngine_DomainFronting(t *testing.T) {
 		// that uses the test server's cert pool. This is a bit ugly.
 		// A better solution would be to allow passing a cert pool to the engine,
 		// but that's a larger refactoring.
-		baseDialer, err := (&engine2.DefaultDialerFactory{}).NewDialer(&fp.Transport, &fp.TLS)
+		baseDialer, err := (&gengine.DefaultDialerFactory{}).NewDialer(&fp.Transport, &fp.TLS)
 		require.NoError(t, err)
 
 		rawConn, err := baseDialer(ctx, network, fp.DomainFronting.FrontDomain)
 		require.NoError(t, err)
 
-		tlsConn, err := engine2.NewTLSClient(rawConn, &fp.TLS, fp.DomainFronting.FrontDomain, testserver.CertPool())
+		tlsConn, err := engine.NewTLSClient(rawConn, &fp.TLS, fp.DomainFronting.FrontDomain, testserver.CertPool())
 		require.NoError(t, err)
 
 		err = establishHTTPConnectTunnel(tlsConn, fp.DomainFronting.CovertTarget, address, "")
@@ -383,4 +390,40 @@ func TestEngine_DomainFronting(t *testing.T) {
 	clientConn, err := customDialer(ctx, "tcp", "dummy.destination.com:443")
 	require.NoError(t, err, "Dialer should connect successfully")
 	clientConn.Close()
+}
+
+func TestEngine_NewProxyForStrategy(t *testing.T) {
+	logger := logging.GetLogger()
+	fp := config.Fingerprint{
+		ID: "test-tcp-secure",
+		DomainFronting: &config.DomainFronting{
+			Enabled:      true,
+			FrontDomain:  "example.com",
+			CovertTarget: "covert.example.com",
+		},
+		Transport: config.Transport{
+			Protocol: "tcp",
+		},
+		TLS: config.TLS{
+			Library:    "utls",
+			ServerName: "example.com",
+		},
+	}
+	fileConfig := &config.FileConfig{
+		Fingerprints:  []config.Fingerprint{fp},
+		DoHProviders:  []config.DoHProvider{{Name: "dummy", URL: "https://1.2.3.4/dns-query", Bootstrap: []string{"1.2.3.4"}}},
+		CanaryDomains: []string{"example.com"},
+	}
+	engine, err := NewEngine(fileConfig, logger)
+	require.NoError(t, err)
+
+	// Let NewProxyForStrategy create its own resolver from the engine's config.
+	proxyServer, err := engine.NewProxyForStrategy(context.Background(), "127.0.0.1:0", &fp, nil)
+	require.NoError(t, err)
+	require.NotNil(t, proxyServer)
+	defer func() {
+		assert.NoError(t, proxyServer.Stop())
+	}()
+
+	assert.NotEmpty(t, proxyServer.Addr())
 }

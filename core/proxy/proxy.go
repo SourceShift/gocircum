@@ -1,8 +1,8 @@
 package proxy
 
 import (
-	"context"
 	"fmt"
+	"gocircum/core/engine"
 	"net"
 
 	"github.com/armon/go-socks5"
@@ -10,7 +10,7 @@ import (
 
 // CustomDialer is a function that can establish a network connection.
 // This allows the SOCKS5 server to use our custom transport stacks.
-type CustomDialer func(ctx context.Context, network, address string) (net.Conn, error)
+type CustomDialer = engine.Dialer
 
 // Proxy wraps the SOCKS5 server and manages its lifecycle.
 type Proxy struct {

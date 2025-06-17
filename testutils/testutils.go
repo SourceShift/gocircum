@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/http"
 	"sync"
 	"testing"
 	"time"
@@ -171,4 +172,20 @@ func AssertEventuallyConnectedToProxy(t *testing.T, proxyAddr, targetAddr string
 	require.Eventually(t, func() bool {
 		return CheckSOCKS5Proxy(proxyAddr, targetAddr) == nil
 	}, TestTimeout, TestInterval, "Timed out waiting for proxy connection")
+}
+
+// NewSOCKS5Client creates an http.Client that routes traffic through a SOCKS5 proxy.
+func NewSOCKS5Client(proxyAddr string) (*http.Client, error) {
+	dialer, err := proxy.SOCKS5("tcp", proxyAddr, nil, proxy.Direct)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create SOCKS5 dialer: %w", err)
+	}
+
+	return &http.Client{
+		Transport: &http.Transport{
+			DialContext: func(_ context.Context, network, addr string) (net.Conn, error) {
+				return dialer.Dial(network, addr)
+			},
+		},
+	}, nil
 }
