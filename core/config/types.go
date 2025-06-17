@@ -10,6 +10,7 @@ import (
 type FileConfig struct {
 	Proxy          *Proxy        `yaml:"proxy,omitempty"`
 	Fingerprints   []Fingerprint `yaml:"fingerprints"`
+	DoHProviders   []DoHProvider `yaml:"doh_providers,omitempty"`
 	CanaryDomains  []string      `yaml:"canary_domains,omitempty"`
 	Disabled       bool          `yaml:"disabled,omitempty"`
 	ConnectTimeout time.Duration `yaml:"connect_timeout,omitempty"`
@@ -77,16 +78,18 @@ type Transport struct {
 type Fragmentation struct {
 	PacketSizes [][2]int `yaml:"packet_sizes"`
 	DelayMs     [2]int   `yaml:"delay_ms"`
+	Algorithm   string   `yaml:"algorithm,omitempty"`
 }
 
 // TLS configures the TLS layer.
 type TLS struct {
 	Library         string         `yaml:"library,omitempty"`         // go-stdlib, utls
 	ClientHelloID   string         `yaml:"client_hello_id,omitempty"` // e.g., "HelloChrome_102"
-	SkipVerify      *bool          `yaml:"skip_verify,omitempty"`     // DANGEROUS: Disables certificate validation
-	RootCAs         *x509.CertPool `yaml:"-"`                         // This will not be marshalled from/to YAML.
-	MinVersion      string         `yaml:"min_version,omitempty"`     // e.g., "1.2"
-	MaxVersion      string         `yaml:"max_version,omitempty"`     // e.g., "1.3"
+	UserAgent       string         `yaml:"user_agent,omitempty"`
+	SkipVerify      *bool          `yaml:"skip_verify,omitempty"` // DANGEROUS: Disables certificate validation
+	RootCAs         *x509.CertPool `yaml:"-"`                     // This will not be marshalled from/to YAML.
+	MinVersion      string         `yaml:"min_version,omitempty"` // e.g., "1.2"
+	MaxVersion      string         `yaml:"max_version,omitempty"` // e.g., "1.3"
 	CipherSuites    []string       `yaml:"cipher_suites,omitempty"`
 	ALPN            []string       `yaml:"alpn,omitempty"`
 	ECHEnabled      bool           `yaml:"ech_enabled,omitempty"`
@@ -94,4 +97,13 @@ type TLS struct {
 	UTLSParrot      string         `yaml:"utls_parrot,omitempty"`
 	QUICNextProtos  []string       `yaml:"quic_next_protos,omitempty"`
 	QUICIdleTimeout time.Duration  `yaml:"quic_idle_timeout,omitempty"`
+}
+
+// DoHProvider holds the configuration for a single DNS-over-HTTPS provider.
+type DoHProvider struct {
+	Name       string   `yaml:"name"`
+	URL        string   `yaml:"url"`
+	ServerName string   `yaml:"server_name"`
+	Bootstrap  []string `yaml:"bootstrap"`
+	RootCA     string   `yaml:"root_ca,omitempty"`
 }

@@ -4,8 +4,10 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"fmt"
+	"gocircum/core/config"
 	"math/big"
 	"net"
 	"net/http"
@@ -14,17 +16,9 @@ import (
 	"time"
 )
 
-// DoHProvider holds the configuration for a single DNS-over-HTTPS provider.
-type DoHProvider struct {
-	Name       string
-	URL        string   // e.g., "https://dns.cloudflare.com/dns-query"
-	ServerName string   // e.g., "dns.cloudflare.com"
-	Bootstrap  []string // List of IP:Port addresses for bootstrap
-}
-
 var (
 	// A list of trusted DoH providers.
-	dohProviders = []DoHProvider{
+	dohProviders = []config.DoHProvider{
 		{
 			Name:       "Cloudflare",
 			URL:        "https://dns.cloudflare.com/dns-query",
@@ -49,21 +43,25 @@ var (
 
 // DoHResolver implements socks5.Resolver using DNS-over-HTTPS.
 type DoHResolver struct {
-	providers []DoHProvider
+	providers []config.DoHProvider
 }
 
 // NewDoHResolver creates a secure resolver that uses a set of trusted DoH providers.
-func NewDoHResolver() *DoHResolver {
+func NewDoHResolver(providers []config.DoHProvider) *DoHResolver {
+	if len(providers) == 0 {
+		// Fallback to the default list if none are provided.
+		return &DoHResolver{providers: dohProviders}
+	}
 	return &DoHResolver{
-		providers: dohProviders,
+		providers: providers,
 	}
 }
 
 // getShuffledProviders returns a shuffled copy of the DoH providers.
-func (r *DoHResolver) getShuffledProviders() []DoHProvider {
+func (r *DoHResolver) getShuffledProviders() []config.DoHProvider {
 	mu.Lock()
 	defer mu.Unlock()
-	shuffled := make([]DoHProvider, len(r.providers))
+	shuffled := make([]config.DoHProvider, len(r.providers))
 	copy(shuffled, r.providers)
 
 	// Fisher-Yates shuffle using crypto/rand for secure, unpredictable shuffling.
@@ -79,10 +77,20 @@ func (r *DoHResolver) getShuffledProviders() []DoHProvider {
 	return shuffled
 }
 
-var createClientForProvider = func(provider DoHProvider) *http.Client {
+var createClientForProvider = func(provider config.DoHProvider) *http.Client {
 	dialer := &net.Dialer{
 		Timeout:   10 * time.Second,
 		KeepAlive: 10 * time.Second,
+	}
+
+	tlsConfig := &tls.Config{ServerName: provider.ServerName}
+	if provider.RootCA != "" {
+		caCertPool := x509.NewCertPool()
+		// We can ignore the boolean return value. If the PEM data is invalid,
+		// AppendCertsFromPEM will just not add any certs to the pool, and we'll
+		// proceed with the system's default trust store.
+		caCertPool.AppendCertsFromPEM([]byte(provider.RootCA))
+		tlsConfig.RootCAs = caCertPool
 	}
 
 	transport := &http.Transport{
@@ -109,7 +117,7 @@ var createClientForProvider = func(provider DoHProvider) *http.Client {
 			}
 			return nil, fmt.Errorf("failed to connect to any bootstrap server for %s: %w", provider.Name, lastErr)
 		},
-		TLSClientConfig: &tls.Config{ServerName: provider.ServerName},
+		TLSClientConfig: tlsConfig,
 	}
 
 	return &http.Client{

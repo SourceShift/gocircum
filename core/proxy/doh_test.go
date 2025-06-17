@@ -11,12 +11,14 @@ import (
 	"testing"
 	"time"
 
+	"gocircum/core/config"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func TestGetShuffledProviders(t *testing.T) {
-	resolver := NewDoHResolver()
+	resolver := NewDoHResolver(nil)
 	shuffled1 := resolver.getShuffledProviders()
 	shuffled2 := resolver.getShuffledProviders()
 
@@ -48,10 +50,10 @@ func TestDoHResolver_Resolve_Failover(t *testing.T) {
 	}))
 	defer failingServer.Close()
 
-	resolver := NewDoHResolver()
+	resolver := NewDoHResolver(nil)
 
 	// Override providers for test
-	resolver.providers = []DoHProvider{
+	resolver.providers = []config.DoHProvider{
 		{
 			Name:       "Failing",
 			URL:        failingServer.URL,
@@ -70,7 +72,7 @@ func TestDoHResolver_Resolve_Failover(t *testing.T) {
 	// We can do this by modifying the createClientForProvider function for the test.
 	originalCreateClient := createClientForProvider
 	defer func() { createClientForProvider = originalCreateClient }()
-	createClientForProvider = func(provider DoHProvider) *http.Client {
+	createClientForProvider = func(provider config.DoHProvider) *http.Client {
 		client := originalCreateClient(provider)
 		transport := client.Transport.(*http.Transport)
 		certpool := x509.NewCertPool()
@@ -97,8 +99,8 @@ func TestDoHResolver_Resolve_AllFail(t *testing.T) {
 	}))
 	defer failingServer2.Close()
 
-	resolver := NewDoHResolver()
-	resolver.providers = []DoHProvider{
+	resolver := NewDoHResolver(nil)
+	resolver.providers = []config.DoHProvider{
 		{
 			Name:       "Failing1",
 			URL:        failingServer1.URL,
@@ -115,7 +117,7 @@ func TestDoHResolver_Resolve_AllFail(t *testing.T) {
 
 	originalCreateClient := createClientForProvider
 	defer func() { createClientForProvider = originalCreateClient }()
-	createClientForProvider = func(provider DoHProvider) *http.Client {
+	createClientForProvider = func(provider config.DoHProvider) *http.Client {
 		client := originalCreateClient(provider)
 		transport := client.Transport.(*http.Transport)
 		certpool := x509.NewCertPool()
@@ -149,8 +151,8 @@ func TestDoHResolver_Resolve(t *testing.T) {
 		}))
 		defer server.Close()
 
-		resolver := NewDoHResolver()
-		resolver.providers = []DoHProvider{
+		resolver := NewDoHResolver(nil)
+		resolver.providers = []config.DoHProvider{
 			{
 				Name:       "TestServer",
 				URL:        server.URL + "/dns-query",
@@ -161,7 +163,7 @@ func TestDoHResolver_Resolve(t *testing.T) {
 
 		originalCreateClient := createClientForProvider
 		defer func() { createClientForProvider = originalCreateClient }()
-		createClientForProvider = func(provider DoHProvider) *http.Client {
+		createClientForProvider = func(provider config.DoHProvider) *http.Client {
 			client := originalCreateClient(provider)
 			transport := client.Transport.(*http.Transport)
 			certpool := x509.NewCertPool()
@@ -189,8 +191,8 @@ func TestDoHResolver_Resolve(t *testing.T) {
 		}))
 		defer server.Close()
 
-		resolver := NewDoHResolver()
-		resolver.providers = []DoHProvider{
+		resolver := NewDoHResolver(nil)
+		resolver.providers = []config.DoHProvider{
 			{
 				Name:       "TestServer",
 				URL:        server.URL,
@@ -201,7 +203,7 @@ func TestDoHResolver_Resolve(t *testing.T) {
 
 		originalCreateClient := createClientForProvider
 		defer func() { createClientForProvider = originalCreateClient }()
-		createClientForProvider = func(provider DoHProvider) *http.Client {
+		createClientForProvider = func(provider config.DoHProvider) *http.Client {
 			client := originalCreateClient(provider)
 			transport := client.Transport.(*http.Transport)
 			certpool := x509.NewCertPool()
@@ -222,7 +224,7 @@ func TestCreateClientForProvider_BootstrapFailover(t *testing.T) {
 	}))
 	defer workingServer.Close()
 
-	provider := DoHProvider{
+	provider := config.DoHProvider{
 		Name:       "Test",
 		URL:        "https://example.com",
 		ServerName: "example.com",

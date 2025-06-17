@@ -24,7 +24,7 @@ func New(addr string, dialer CustomDialer) (*Proxy, error) {
 	conf := &socks5.Config{
 		// The custom dialer is the key to integrating our transport logic.
 		Dial:     dialer,
-		Resolver: NewDoHResolver(),
+		Resolver: NewDoHResolver(nil),
 	}
 
 	server, err := socks5.New(conf)
