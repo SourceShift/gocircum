@@ -62,7 +62,7 @@ func TestEngine_ProxyLifecycle(t *testing.T) {
 
 	// 1. Start the proxy and check status
 	addr := "127.0.0.1:0" // Use a random free port
-	err = engine.StartProxyWithStrategy(context.Background(), addr, &fp)
+	_, err = engine.StartProxyWithStrategy(context.Background(), addr, &fp)
 	assert.NoError(t, err, "StartProxyWithStrategy should not return an immediate error")
 
 	// Give the proxy a moment to start
@@ -92,7 +92,7 @@ func TestEngine_ProxyFailure(t *testing.T) {
 
 	// Start the proxy
 	addr := "127.0.0.1:0"
-	err = engine.StartProxyWithStrategy(context.Background(), addr, &fp)
+	_, err = engine.StartProxyWithStrategy(context.Background(), addr, &fp)
 	require.NoError(t, err, "StartProxyWithStrategy should not return an immediate error")
 
 	// Wait for the proxy to be running and have a listener
@@ -197,7 +197,7 @@ func TestEngine_DomainFronting(t *testing.T) {
 		tlsConn, err := engine2.NewTLSClient(rawConn, &fp.TLS, fp.DomainFronting.FrontDomain, testserver.CertPool())
 		require.NoError(t, err)
 
-		err = establishHTTPConnectTunnel(tlsConn, fp.DomainFronting.CovertTarget, address)
+		err = establishHTTPConnectTunnel(tlsConn, fp.DomainFronting.CovertTarget, address, "")
 		require.NoError(t, err)
 
 		return tlsConn, nil

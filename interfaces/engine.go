@@ -10,7 +10,7 @@ import (
 // Engine defines the public interface for the circumvention engine.
 type Engine interface {
 	// Start finds the best strategy and starts a proxy.
-	Start(addr string) error
+	Start(addr string) (string, error)
 	// Stop gracefully stops the engine.
 	Stop() error
 	// Status returns the current operational status of the engine.
@@ -22,5 +22,5 @@ type Engine interface {
 	// GetStrategyByID returns a strategy fingerprint by its ID.
 	GetStrategyByID(id string) (*config.Fingerprint, error)
 	// StartProxyWithStrategy starts a SOCKS5 proxy using a specific fingerprint.
-	StartProxyWithStrategy(ctx context.Context, addr string, fp *config.Fingerprint) error
+	StartProxyWithStrategy(ctx context.Context, addr string, fp *config.Fingerprint) (string, error)
 }

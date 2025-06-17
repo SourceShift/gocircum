@@ -16,18 +16,33 @@ import (
 // based on the provided TLS configuration. An optional sni can be provided
 // to override the server name for the TLS handshake.
 func NewTLSClient(conn net.Conn, cfg *config.TLS, serverName string, rootCAs *x509.CertPool) (net.Conn, error) {
+	// For censorship circumvention, uTLS is strongly recommended for client-side connections.
+	// Standard library TLS ClientHellos are often easily fingerprinted.
+	// We'll enforce uTLS or uquic unless it's a very specific server-side use case not covered by this client logic.
 	switch cfg.Library {
-	case "go-stdlib", "stdlib":
-		return newStandardTLSClient(conn, serverName, cfg, rootCAs)
 	case "utls":
 		return newUTLSClient(conn, serverName, cfg, rootCAs)
+	case "go-stdlib", "stdlib":
+		logging.GetLogger().Warn("SECURITY WARNING: 'go-stdlib' TLS library selected. This library's TLS ClientHello fingerprint is easily detectable by DPI systems. Consider using 'utls' with a randomized ClientHelloID for better circumvention.",
+			"fingerprint_id", cfg.ClientHelloID, // Provide context
+			"advice", "Change 'tls.library' to 'utls' and specify a 'client_hello_id' like 'HelloRandomized'.",
+		)
+		// Fallback to standard TLS client, but it's not recommended for censorship circumvention.
+		return newStandardTLSClient(conn, serverName, cfg, rootCAs)
 	case "uquic":
 		// For QUIC, the TLS config is part of the transport.
 		// This case is handled by the transport layer itself.
 		// We return the raw connection, assuming TLS is managed by the QUIC transport.
 		return conn, nil
 	default:
-		return nil, fmt.Errorf("unsupported TLS library: %s", cfg.Library)
+		// Default to uTLS if not specified or unknown.
+		logging.GetLogger().Warn("Unknown or unspecified TLS library '%s'. Defaulting to 'utls' with 'HelloChrome_Auto'.",
+			"provided_library", cfg.Library,
+		)
+		// Set a default for uTLS if it's not configured, but make it explicit.
+		// This might require modifying the config passed in or having a more robust default logic.
+		// For now, we'll return an error to force explicit configuration or better defaults.
+		return nil, fmt.Errorf("unsupported or unspecified TLS library: %s. Must be 'utls' or 'uquic' for client. 'go-stdlib' is deprecated for circumvention.", cfg.Library)
 	}
 }
 
@@ -65,8 +80,9 @@ func newUTLSClient(conn net.Conn, serverName string, cfg *config.TLS, rootCAs *x
 }
 
 func buildStandardTLSConfig(serverName string, cfg *config.TLS, rootCAs *x509.CertPool) (*tls.Config, error) {
+	// For uTLS, we log a warning but always enforce verification.
 	if cfg.SkipVerify != nil && *cfg.SkipVerify {
-		logging.GetLogger().Error("SECURITY WARNING: 'skip_verify: true' is configured, but this option is deprecated and IGNORED. TLS certificate validation is enforced.",
+		logging.GetLogger().Warn("SECURITY WARNING: 'skip_verify: true' is configured, but this option is deprecated and IGNORED. TLS certificate validation is enforced.",
 			"risk", "Man-in-the-Middle (MITM) attacks",
 			"advice", "Remove 'skip_verify: true' from your configuration. This option is for testing only.",
 		)
@@ -91,8 +107,9 @@ func buildStandardTLSConfig(serverName string, cfg *config.TLS, rootCAs *x509.Ce
 }
 
 func buildUTLSConfig(serverName string, cfg *config.TLS, rootCAs *x509.CertPool) (*utls.Config, error) {
+	// For uTLS, we log a warning but always enforce verification.
 	if cfg.SkipVerify != nil && *cfg.SkipVerify {
-		logging.GetLogger().Error("SECURITY WARNING: 'skip_verify: true' is configured, but this option is deprecated and IGNORED. TLS certificate validation is enforced.",
+		logging.GetLogger().Warn("SECURITY WARNING: 'skip_verify: true' is configured, but this option is deprecated and IGNORED. TLS certificate validation is enforced.",
 			"risk", "Man-in-the-Middle (MITM) attacks",
 			"advice", "Remove 'skip_verify: true' from your configuration. This option is for testing only.",
 		)

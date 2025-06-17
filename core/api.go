@@ -35,7 +35,7 @@ func NewEngine(cfg *config.FileConfig, logger logging.Logger) (*Engine, error) {
 		logger = logging.GetLogger()
 	}
 	return &Engine{
-		ranker:         ranker.NewRanker(logger),
+		ranker:         ranker.NewRanker(logger, cfg.DoHProviders),
 		config:         cfg,
 		proxyErrorChan: make(chan error, 1),
 		logger:         logger.With("component", "engine"),
@@ -118,37 +118,31 @@ func (e *Engine) TestStrategies(ctx context.Context) ([]ranker.StrategyResult, e
 	return results, err
 }
 
-// StartProxyWithStrategy starts a SOCKS5 proxy using a specific fingerprint.
-// This is a non-blocking call. The proxy runs in a background goroutine.
-func (e *Engine) StartProxyWithStrategy(ctx context.Context, addr string, fp *config.Fingerprint) error {
+// StartProxyWithStrategy starts the SOCKS5 proxy with a specific strategy.
+// It returns the actual listening address (which may be different from the provided
+// address if a random port was requested) and an error if one occurred.
+func (e *Engine) StartProxyWithStrategy(ctx context.Context, addr string, strategy *config.Fingerprint) (string, error) {
+	e.logger.Debug("starting proxy with strategy", "strategy_id", strategy.ID, "listen_addr", addr)
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
 	if e.activeProxy != nil {
-		return fmt.Errorf("a proxy is already running on %s", e.activeProxy.Addr())
+		return "", fmt.Errorf("a proxy is already running on %s", e.activeProxy.Addr())
 	}
 
-	dialer, err := e.createDialerForStrategy(fp)
+	dialer, err := e.createDialerForStrategy(strategy)
 	if err != nil {
-		return fmt.Errorf("could not create dialer for strategy %s: %w", fp.ID, err)
+		return "", fmt.Errorf("could not create dialer for strategy %s: %w", strategy.ID, err)
 	}
 
 	p, err := proxy.New(addr, dialer)
 	if err != nil {
-		return fmt.Errorf("could not create proxy: %w", err)
+		return "", fmt.Errorf("failed to create socks5 server: %w", err)
 	}
 	e.activeProxy = p
 
-	// Create a new context for this proxy instance that we can cancel.
-	_, cancel := context.WithCancel(context.Background())
-	e.cancelProxy = cancel
-
-	// Reset error state for the new proxy instance
-	e.proxyErrorChan = make(chan error, 1)
-	e.lastProxyError = nil
-
 	go func() {
-		e.logger.Info("Starting proxy with strategy", "strategy", fp.Description, "address", p.Addr())
+		e.logger.Info("Starting proxy with strategy", "strategy", strategy.Description, "address", p.Addr())
 		err := p.Start() // This is a blocking call
 
 		// After Start() returns, the proxy has stopped, either gracefully or due to an error.
@@ -167,21 +161,22 @@ func (e *Engine) StartProxyWithStrategy(ctx context.Context, addr string, fp *co
 			}
 			e.activeProxy = nil // It has stopped, so clear it.
 		}
-		// If e.activeProxy is nil or a different instance, it means Stop() was called.
-		// In that case, we don't need to do anything.
 	}()
 
-	return nil
+	return p.Addr(), nil
 }
 
 // establishHTTPConnectTunnel sends an HTTP CONNECT request to establish a tunnel.
-func establishHTTPConnectTunnel(conn net.Conn, covertTarget, finalDestination string) error {
+func establishHTTPConnectTunnel(conn net.Conn, covertTarget, finalDestination, userAgent string) error {
 	req, err := http.NewRequest("CONNECT", "http://"+finalDestination, nil)
 	if err != nil {
 		return fmt.Errorf("failed to create CONNECT request: %w", err)
 	}
 	req.Host = covertTarget
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/96.0.4664.110 Safari/537.36")
+	if userAgent == "" {
+		userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/96.0.4664.110 Safari/537.36"
+	}
+	req.Header.Set("User-Agent", userAgent)
 
 	if err := req.Write(conn); err != nil {
 		return fmt.Errorf("failed to write CONNECT request: %w", err)
@@ -231,7 +226,7 @@ func (e *Engine) createDialerForStrategy(fp *config.Fingerprint) (proxy.CustomDi
 			}
 
 			// 3. Establish HTTP CONNECT tunnel to the actual destination ('address')
-			if err := establishHTTPConnectTunnel(tlsConn, fp.DomainFronting.CovertTarget, address); err != nil {
+			if err := establishHTTPConnectTunnel(tlsConn, fp.DomainFronting.CovertTarget, address, fp.TLS.UserAgent); err != nil {
 				tlsConn.Close()
 				return nil, fmt.Errorf("http connect tunnel failed for %s: %w", address, err)
 			}
@@ -249,12 +244,24 @@ func (e *Engine) createDialerForStrategy(fp *config.Fingerprint) (proxy.CustomDi
 			e.logger.Warn("Could not split host/port, using address as host for SNI", "address", address, "error", err)
 			host = address
 		}
+
+		// WARNING: For direct connections without Domain Fronting, SNI is typically visible.
+		// The `serverName` passed to `NewTLSClient` becomes the SNI.
+		// For enhanced privacy, ensure ECH is enabled and configured if supported by the TLS library.
+		if !fp.TLS.ECHEnabled { // Add a check for ECH
+			e.logger.Warn("Potential SNI leakage: Domain Fronting is not enabled and ECH is not configured for this strategy. SNI might be visible to censors.",
+				"strategy_id", fp.ID,
+				"target_host", host,
+			)
+		}
+
 		rawConn, err := baseDialer(ctx, network, address)
 		if err != nil {
 			return nil, fmt.Errorf("base dialer failed for %s: %w", address, err)
 		}
 
-		tlsConn, err := engine.NewTLSClient(rawConn, &fp.TLS, host, nil) // Pass parsed host as SNI
+		// Ensure TLS client is created with the correct server name for SNI
+		tlsConn, err := engine.NewTLSClient(rawConn, &fp.TLS, host, nil)
 		if err != nil {
 			rawConn.Close()
 			return nil, fmt.Errorf("tls client creation failed: %w", err)

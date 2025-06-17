@@ -34,15 +34,16 @@ func TestEngineLifecycle(t *testing.T) {
 	// This makes it an integration test, not a unit test.
 	// For now, we'll just check that it doesn't return an immediate error.
 	// A proper integration test would require a test server.
-	if err := engine.StartProxyWithStrategy(context.Background(), "127.0.0.1:1080", best); err != nil {
-		t.Errorf("Engine failed to start: %v", err)
+	addr, err := engine.StartProxyWithStrategy(context.Background(), "127.0.0.1:0", best)
+	if err != nil {
+		t.Fatalf("Engine failed to start: %v", err)
 	}
 
 	status, err := engine.Status()
 	if err != nil {
 		t.Fatalf("Failed to get engine status: %v", err)
 	}
-	expectedStatus := "Proxy running on 127.0.0.1:1080"
+	expectedStatus := "Proxy running on " + addr
 	if status != expectedStatus {
 		t.Errorf("Expected status '%s', got '%s'", expectedStatus, status)
 	}

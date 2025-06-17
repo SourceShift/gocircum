@@ -6,12 +6,19 @@ import (
 	"fmt"
 	"gocircum/core/config"
 	"gocircum/core/engine"
+	"gocircum/core/proxy"
 	"gocircum/pkg/logging"
 	"math/rand"
+	"net"
 	"sort"
 	"sync"
 	"time"
 )
+
+// DNSResolver defines the interface for a DNS resolver.
+type DNSResolver interface {
+	Resolve(ctx context.Context, name string) (context.Context, net.IP, error)
+}
 
 // StrategyResult holds the outcome of testing a single fingerprint.
 type StrategyResult struct {
@@ -33,10 +40,11 @@ type Ranker struct {
 	CacheLock     sync.RWMutex
 	Logger        logging.Logger
 	DialerFactory engine.DialerFactory
+	DoHResolver   DNSResolver
 }
 
 // NewRanker creates a new Ranker instance.
-func NewRanker(logger logging.Logger) *Ranker {
+func NewRanker(logger logging.Logger, dohProviders []config.DoHProvider) *Ranker {
 	if logger == nil {
 		logger = logging.GetLogger()
 	}
@@ -45,6 +53,7 @@ func NewRanker(logger logging.Logger) *Ranker {
 		Logger:        logger,
 		Cache:         make(map[string]*CacheEntry),
 		DialerFactory: &engine.DefaultDialerFactory{},
+		DoHResolver:   proxy.NewDoHResolver(dohProviders),
 	}
 }
 
@@ -113,6 +122,22 @@ func (r *Ranker) TestAndRank(ctx context.Context, fingerprints []*config.Fingerp
 
 // testStrategy performs a single connection test.
 func (r *Ranker) testStrategy(ctx context.Context, fingerprint *config.Fingerprint, canaryDomains []string) (bool, time.Duration, error) {
+	if len(canaryDomains) == 0 {
+		return false, 0, fmt.Errorf("no canary domains provided")
+	}
+	domainToResolve := canaryDomains[rand.Intn(len(canaryDomains))]
+
+	// Use the DoHResolver to resolve the canary domain securely.
+	// This prevents system DNS leakage.
+	_, resolvedIP, err := r.DoHResolver.Resolve(ctx, domainToResolve)
+	if err != nil {
+		r.Logger.Warn("Failed to securely resolve canary domain for testing", "domain", domainToResolve, "error", err)
+		return false, 0, fmt.Errorf("failed to securely resolve canary domain '%s': %w", domainToResolve, err)
+	}
+
+	// The address for the dialer must now be IP:port
+	addressToDial := resolvedIP.String() + ":443" // Assuming HTTPS default port
+
 	dialer, err := r.DialerFactory.NewDialer(&fingerprint.Transport, &fingerprint.TLS)
 	if err != nil {
 		return false, 0, err
@@ -121,14 +146,8 @@ func (r *Ranker) testStrategy(ctx context.Context, fingerprint *config.Fingerpri
 	// Add random jitter to break timing patterns
 	time.Sleep(time.Duration(50+rand.Intn(200)) * time.Millisecond)
 
-	// Randomly select a canary domain
-	if len(canaryDomains) == 0 {
-		return false, 0, fmt.Errorf("no canary domains provided")
-	}
-	domain := canaryDomains[rand.Intn(len(canaryDomains))]
-
 	start := time.Now()
-	conn, err := dialer(ctx, "tcp", domain)
+	conn, err := dialer(ctx, "tcp", addressToDial)
 	if err != nil {
 		return false, 0, err
 	}

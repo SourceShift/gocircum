@@ -2,6 +2,7 @@ package ranker
 
 import (
 	"context"
+	"fmt"
 	"gocircum/core/config"
 	"gocircum/core/engine"
 	"gocircum/testutils"
@@ -12,9 +13,25 @@ import (
 	"go.uber.org/mock/gomock"
 )
 
+// mockResolver implements the DNSResolver interface for testing.
+type mockResolver struct{}
+
+func (m *mockResolver) Resolve(ctx context.Context, name string) (context.Context, net.IP, error) {
+	if name == "www.example.com" {
+		return ctx, net.ParseIP("1.2.3.4"), nil
+	}
+	return ctx, nil, fmt.Errorf("domain not found in mock resolver: %s", name)
+}
+
 // mockDialer simulates network dialing for tests.
-func mockDialer(ctrl *gomock.Controller, succeed bool, delay time.Duration) engine.Dialer {
+// It now checks if the address is the expected IP.
+func mockDialer(t *testing.T, ctrl *gomock.Controller, succeed bool, delay time.Duration, expectedAddr string) engine.Dialer {
 	return func(ctx context.Context, network, address string) (net.Conn, error) {
+		if address != expectedAddr {
+			t.Errorf("dialer called with wrong address: got %s, want %s", address, expectedAddr)
+			return nil, fmt.Errorf("unexpected address for dialer")
+		}
+
 		if succeed {
 			time.Sleep(delay)
 			conn := testutils.NewMockConn(ctrl)
@@ -26,20 +43,21 @@ func mockDialer(ctrl *gomock.Controller, succeed bool, delay time.Duration) engi
 }
 
 type mockDialerFactory struct {
+	t    *testing.T
 	ctrl *gomock.Controller
 }
 
 func (f *mockDialerFactory) NewDialer(transportCfg *config.Transport, tlsCfg *config.TLS) (engine.Dialer, error) {
-	// This is a simplified mock. A more complex test could check cfg.
-	// We'll determine behavior based on the fingerprint ID, which we'll pass
-	// via the ClientHelloID field for convenience in this test.
+	// The mock dialer now needs the expected IP address.
+	expectedAddr := "1.2.3.4:443" // Based on mockResolver and default port.
+
 	switch tlsCfg.ClientHelloID {
 	case "fp1":
-		return mockDialer(f.ctrl, true, 50*time.Millisecond), nil
+		return mockDialer(f.t, f.ctrl, true, 50*time.Millisecond, expectedAddr), nil
 	case "fp2":
-		return mockDialer(f.ctrl, true, 150*time.Millisecond), nil
+		return mockDialer(f.t, f.ctrl, true, 150*time.Millisecond, expectedAddr), nil
 	default:
-		return mockDialer(f.ctrl, false, 0), nil
+		return mockDialer(f.t, f.ctrl, false, 0, expectedAddr), nil
 	}
 }
 
@@ -48,8 +66,9 @@ func TestRanker_TestAndRank(t *testing.T) {
 	defer ctrl.Finish()
 
 	logger := testutils.NewTestLogger()
-	ranker := NewRanker(logger)
-	ranker.DialerFactory = &mockDialerFactory{ctrl: ctrl} // Inject the mock factory
+	ranker := NewRanker(logger, nil)
+	ranker.DialerFactory = &mockDialerFactory{t: t, ctrl: ctrl} // Inject the mock factory
+	ranker.DoHResolver = &mockResolver{}                        // Inject the mock resolver
 
 	fingerprints := []*config.Fingerprint{
 		{ID: "fp1", TLS: config.TLS{ClientHelloID: "fp1"}}, // Should succeed fast
@@ -57,7 +76,7 @@ func TestRanker_TestAndRank(t *testing.T) {
 		{ID: "fp3", TLS: config.TLS{ClientHelloID: "fp3"}}, // Should fail
 	}
 
-	canaryDomains := []string{"www.example.com:443"}
+	canaryDomains := []string{"www.example.com"} // Domain without port now
 	results, err := ranker.TestAndRank(context.Background(), fingerprints, canaryDomains)
 	if err != nil {
 		t.Fatalf("TestAndRank failed: %v", err)

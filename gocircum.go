@@ -27,16 +27,16 @@ func NewEngine(cfg *config.FileConfig, logger logging.Logger) (interfaces.Engine
 }
 
 // Start finds the best strategy and starts a proxy.
-func (e *Engine) Start(addr string) error {
+func (e *Engine) Start(addr string) (string, error) {
 	best, err := e.GetBestStrategy(context.Background())
 	if err != nil {
-		return fmt.Errorf("could not get best strategy: %w", err)
+		return "", fmt.Errorf("could not get best strategy: %w", err)
 	}
 	return e.StartProxyWithStrategy(context.Background(), addr, best)
 }
 
 // StartProxyWithStrategy starts a SOCKS5 proxy using a specific fingerprint.
-func (e *Engine) StartProxyWithStrategy(ctx context.Context, addr string, fp *config.Fingerprint) error {
+func (e *Engine) StartProxyWithStrategy(ctx context.Context, addr string, fp *config.Fingerprint) (string, error) {
 	return e.coreEngine.StartProxyWithStrategy(ctx, addr, fp)
 }
 

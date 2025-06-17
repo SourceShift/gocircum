@@ -64,7 +64,7 @@ func (f *DefaultDialerFactory) NewDialer(transportCfg *config.Transport, tlsCfg 
 
 func buildQUICUTLSConfig(cfg *config.TLS) (*utls.Config, error) {
 	if cfg.SkipVerify != nil && *cfg.SkipVerify {
-		logging.GetLogger().Error("SECURITY WARNING: 'skip_verify: true' is configured for a QUIC strategy, but this option is deprecated and IGNORED. TLS certificate validation is enforced.",
+		logging.GetLogger().Warn("SECURITY WARNING: 'skip_verify: true' is configured for a QUIC strategy, but this option is deprecated and IGNORED. TLS certificate validation is enforced.",
 			"risk", "Man-in-the-Middle (MITM) attacks",
 			"advice", "Remove 'skip_verify: true' from your configuration. This option is for testing only.",
 		)
@@ -126,6 +126,19 @@ func (c *fragmentingConn) Write(b []byte) (n int, err error) {
 	}
 	c.wrotePacket = true
 
+	switch c.cfg.Algorithm {
+	case "even":
+		return c.writeEven(b)
+	case "static", "": // Default to static
+		return c.writeStatic(b)
+	default:
+		c.logError(fmt.Errorf("unknown fragmentation algorithm: %s", c.cfg.Algorithm), "unknown fragmentation algorithm, falling back to static")
+		return c.writeStatic(b)
+	}
+}
+
+// writeStatic fragments the data based on the static ranges defined in the config.
+func (c *fragmentingConn) writeStatic(b []byte) (n int, err error) {
 	totalSent := 0
 	for i, sizeRange := range c.cfg.PacketSizes {
 		if len(b) == 0 {
@@ -177,6 +190,64 @@ func (c *fragmentingConn) Write(b []byte) (n int, err error) {
 			return totalSent + sent, fmt.Errorf("final fragmented write failed: %w", err)
 		}
 		totalSent += sent
+	}
+
+	return totalSent, nil
+}
+
+// writeEven splits the data into a specified number of even-sized chunks.
+// The number of chunks is taken from the first PacketSizes entry.
+func (c *fragmentingConn) writeEven(b []byte) (n int, err error) {
+	if len(c.cfg.PacketSizes) == 0 || c.cfg.PacketSizes[0][0] <= 0 {
+		c.logError(fmt.Errorf("invalid number of chunks for 'even' algorithm"), "invalid config for 'even' fragmentation")
+		return c.Conn.Write(b) // Fallback to no fragmentation
+	}
+	numChunks := c.cfg.PacketSizes[0][0]
+	if numChunks == 1 {
+		return c.Conn.Write(b)
+	}
+
+	chunkSize := len(b) / numChunks
+	if chunkSize == 0 {
+		chunkSize = 1 // Avoid infinite loop for small payloads
+	}
+
+	totalSent := 0
+	for len(b) > 0 {
+		currentChunkSize := chunkSize
+		if currentChunkSize > len(b) {
+			currentChunkSize = len(b)
+		}
+
+		// To make it slightly less predictable, we can add a small random variation to chunk size
+		if len(b) > currentChunkSize { // Don't randomize the last chunk
+			variation, _ := cryptoRandInt(0, chunkSize/5)
+			currentChunkSize += (variation - chunkSize/10)
+			if currentChunkSize <= 0 {
+				currentChunkSize = 1
+			}
+		}
+
+		sent, err := c.Conn.Write(b[:currentChunkSize])
+		if err != nil {
+			return totalSent + sent, fmt.Errorf("fragmented write failed: %w", err)
+		}
+		totalSent += sent
+		b = b[sent:]
+
+		if len(b) > 0 {
+			minDelay, maxDelay := c.cfg.DelayMs[0], c.cfg.DelayMs[1]
+			delayMs := minDelay
+			if maxDelay > minDelay {
+				secureRand, err := cryptoRandInt(minDelay, maxDelay)
+				if err != nil {
+					c.logError(err, "failed to generate secure random number for delay")
+					return totalSent, err
+				}
+				delayMs = secureRand
+			}
+			time.Sleep(time.Duration(delayMs) * time.Millisecond)
+		}
 	}
 
 	return totalSent, nil

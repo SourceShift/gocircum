@@ -32,7 +32,7 @@ func main() {
 	switch os.Args[1] {
 	case "proxy":
 		proxyCmd := flag.NewFlagSet("proxy", flag.ExitOnError)
-		addr := proxyCmd.String("addr", "127.0.0.1:1080", "proxy listen address")
+		addr := proxyCmd.String("addr", "", "proxy listen address (e.g., 127.0.0.1:1080). If empty, uses config or a random port.")
 		strategyID := proxyCmd.String("strategy", "", "Specific strategy ID to use. If not provided, the best ranked strategy will be used.")
 		configFile := proxyCmd.String("config", "strategies.yaml", "Path to the strategies YAML file.")
 		// Add logging flags to help text, but they are handled globally.
@@ -71,6 +71,16 @@ func runProxy(addr, strategyID, configFile string) {
 		os.Exit(1)
 	}
 
+	// Determine listen address
+	listenAddr := addr
+	if listenAddr == "" {
+		if cfg.Proxy != nil && cfg.Proxy.ListenAddr != "" {
+			listenAddr = cfg.Proxy.ListenAddr
+		} else {
+			listenAddr = "127.0.0.1:0" // Default to random ephemeral port
+		}
+	}
+
 	engine, err := core.NewEngine(cfg, logger)
 	if err != nil {
 		logger.Error("Failed to create engine", "error", err)
@@ -96,10 +106,12 @@ func runProxy(addr, strategyID, configFile string) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	if err := engine.StartProxyWithStrategy(ctx, addr, strategy); err != nil {
+	actualAddr, err := engine.StartProxyWithStrategy(ctx, listenAddr, strategy)
+	if err != nil {
 		logger.Error("Failed to start proxy", "error", err)
 		os.Exit(1)
 	}
+	logger.Info("SOCKS5 proxy listening", "address", actualAddr)
 
 	// Wait for termination signal
 	sigCh := make(chan os.Signal, 1)
