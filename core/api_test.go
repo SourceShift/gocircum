@@ -54,8 +54,13 @@ func TestEngine_ProxyLifecycle(t *testing.T) {
 	fp := config.Fingerprint{
 		ID:          "test-tcp",
 		Description: "Test TCP",
-		Transport:   config.Transport{Protocol: "tcp"},
-		TLS:         config.TLS{Library: "go-stdlib"},
+		DomainFronting: &config.DomainFronting{
+			Enabled:      true,
+			FrontDomain:  "example.com",
+			CovertTarget: "covert.example.com",
+		},
+		Transport: config.Transport{Protocol: "tcp"},
+		TLS:       config.TLS{Library: "go-stdlib"},
 	}
 	engine, err := NewEngine(&config.FileConfig{Fingerprints: []config.Fingerprint{fp}}, logger)
 	assert.NoError(t, err, "NewEngine should not return an error")
@@ -65,16 +70,19 @@ func TestEngine_ProxyLifecycle(t *testing.T) {
 	_, err = engine.StartProxyWithStrategy(context.Background(), addr, &fp)
 	assert.NoError(t, err, "StartProxyWithStrategy should not return an immediate error")
 
-	// Give the proxy a moment to start
-	time.Sleep(100 * time.Millisecond)
-	status, err := engine.Status()
-	require.NoError(t, err)
-	assert.Contains(t, status, "Proxy running on", "Status should be 'Proxy running' after starting")
+	// Use Eventually to wait for the proxy to be fully running
+	require.Eventually(t, func() bool {
+		s, e := engine.Status()
+		if e != nil {
+			return false
+		}
+		return assert.Contains(t, s, "Proxy running on")
+	}, 2*time.Second, 10*time.Millisecond, "Proxy should start and have a running status")
 
 	// 2. Stop the proxy and check status
 	err = engine.Stop()
 	assert.NoError(t, err, "Stop should not return an error")
-	status, err = engine.Status()
+	status, err := engine.Status()
 	require.NoError(t, err)
 	assert.Equal(t, "Proxy stopped", status, "Status should be 'Proxy stopped' after stopping")
 }
@@ -84,8 +92,13 @@ func TestEngine_ProxyFailure(t *testing.T) {
 	fp := config.Fingerprint{
 		ID:          "test-tcp-failure",
 		Description: "Test TCP Failure",
-		Transport:   config.Transport{Protocol: "tcp"},
-		TLS:         config.TLS{Library: "go-stdlib"},
+		DomainFronting: &config.DomainFronting{
+			Enabled:      true,
+			FrontDomain:  "example.com",
+			CovertTarget: "covert.example.com",
+		},
+		Transport: config.Transport{Protocol: "tcp"},
+		TLS:       config.TLS{Library: "go-stdlib"},
 	}
 	engine, err := NewEngine(&config.FileConfig{Fingerprints: []config.Fingerprint{fp}}, logger)
 	require.NoError(t, err, "NewEngine should not return an error")

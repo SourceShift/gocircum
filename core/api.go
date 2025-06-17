@@ -235,35 +235,10 @@ func (e *Engine) createDomainFrontingDialer(fp *config.Fingerprint, baseDialer e
 	}, nil
 }
 
-// createDirectDialer handles the insecure direct connection logic.
-func (e *Engine) createDirectDialer(fp *config.Fingerprint, baseDialer engine.Dialer) (proxy.CustomDialer, error) {
-	return func(ctx context.Context, network, address string) (net.Conn, error) {
-		host, port, err := net.SplitHostPort(address)
-		if err != nil {
-			return nil, fmt.Errorf("invalid destination address for SOCKS proxy: %s", address)
-		}
-
-		// Securely resolve the destination to an IP to prevent DNS leaks.
-		_, targetIP, err := e.ranker.DoHResolver.Resolve(ctx, host)
-		if err != nil {
-			return nil, fmt.Errorf("securely resolving target domain %s failed: %w", host, err)
-		}
-		dialAddr := net.JoinHostPort(targetIP.String(), port)
-
-		rawConn, err := baseDialer(ctx, network, dialAddr)
-		if err != nil {
-			return nil, fmt.Errorf("base dialer failed for %s (%s): %w", host, dialAddr, err)
-		}
-
-		// Establish TLS with the real hostname as SNI (this is the leak).
-		tlsConn, err := engine.NewTLSClient(rawConn, &fp.TLS, host, nil)
-		if err != nil {
-			rawConn.Close()
-			return nil, fmt.Errorf("tls client creation failed: %w", err)
-		}
-		return tlsConn, nil
-	}, nil
-}
+// THIS FUNCTION HAS BEEN REMOVED.
+// There should be no code path that allows for direct, un-fronted connections
+// that leak the destination SNI. All connections must use a secure dialer
+// like the domain fronting dialer.
 
 func (e *Engine) createDialerForStrategy(fp *config.Fingerprint) (proxy.CustomDialer, error) {
 	factory := &engine.DefaultDialerFactory{}
@@ -272,15 +247,15 @@ func (e *Engine) createDialerForStrategy(fp *config.Fingerprint) (proxy.CustomDi
 		return nil, fmt.Errorf("failed to create base dialer: %w", err)
 	}
 
+	// Enforce secure-by-default: only domain fronting is allowed.
 	if fp.DomainFronting != nil && fp.DomainFronting.Enabled {
-		// Path 1: Secure dialer using Domain Fronting to hide the true destination.
 		e.logger.Info("Creating dialer with Domain Fronting strategy.", "strategy_id", fp.ID)
 		return e.createDomainFrontingDialer(fp, baseDialer)
 	}
 
-	// Path 2: Insecure direct dialer with potential SNI leakage.
-	e.logger.Warn("SECURITY WARNING: Creating dialer with a direct connection strategy. The destination server name (SNI) will be visible to network observers, making this connection easy to block. Use Domain Fronting for robust censorship resistance.", "strategy_id", fp.ID)
-	return e.createDirectDialer(fp, baseDialer)
+	// Reject any strategy that does not explicitly enable domain fronting.
+	// This prevents accidental use of insecure direct connections.
+	return nil, fmt.Errorf("security policy violation: strategy '%s' must have domain_fronting enabled. Direct connections with SNI leakage are not permitted", fp.ID)
 }
 
 // GetBestStrategy finds the best available strategy by testing and ranking them.

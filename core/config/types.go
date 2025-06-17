@@ -55,13 +55,18 @@ func (f *Fingerprint) Validate() error {
 		return fmt.Errorf("fingerprint ID cannot be empty")
 	}
 
-	if f.DomainFronting != nil && f.DomainFronting.Enabled {
-		if f.DomainFronting.FrontDomain == "" {
-			return fmt.Errorf("front_domain must be set when domain_fronting is enabled")
-		}
-		if f.DomainFronting.CovertTarget == "" {
-			return fmt.Errorf("covert_target must be set when domain_fronting is enabled")
-		}
+	// Security Policy: All strategies MUST use domain fronting.
+	// Direct connections with SNI leaks are not permitted.
+	if f.DomainFronting == nil || !f.DomainFronting.Enabled {
+		return fmt.Errorf("security policy violation: domain_fronting must be enabled for all strategies")
+	}
+
+	// If domain fronting is enabled, its properties must be valid.
+	if f.DomainFronting.FrontDomain == "" {
+		return fmt.Errorf("front_domain must be set when domain_fronting is enabled")
+	}
+	if f.DomainFronting.CovertTarget == "" {
+		return fmt.Errorf("covert_target must be set when domain_fronting is enabled")
 	}
 
 	// Add more validation for Transport and TLS fields

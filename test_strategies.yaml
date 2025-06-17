@@ -4,6 +4,10 @@ canary_domains:
 fingerprints:
   - id: "test_tcp_utls"
     description: "Test TCP with uTLS (Randomized)"
+    domain_fronting:
+      enabled: true
+      front_domain: "example.com"
+      covert_target: "covert.example.com"
     transport:
       protocol: "tcp"
     tls:
