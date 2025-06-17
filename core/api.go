@@ -3,16 +3,25 @@ package core
 import (
 	"bufio"
 	"context"
+	"crypto/rand"
 	"fmt"
 	"gocircum/core/config"
 	"gocircum/core/engine"
 	"gocircum/core/proxy"
 	"gocircum/core/ranker"
 	"gocircum/pkg/logging"
+	"math/big"
 	"net"
 	"net/http"
 	"sync"
 )
+
+var popularUserAgents = []string{
+	"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+	"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+	"Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0",
+	"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4.1 Safari/605.1.15",
+}
 
 // Engine is the main controller for the circumvention library.
 type Engine struct {
@@ -183,7 +192,14 @@ func establishHTTPConnectTunnel(conn net.Conn, covertTarget, finalDestination, u
 	}
 	req.Host = covertTarget
 	if userAgent == "" {
-		userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/96.0.4664.110 Safari/537.36"
+		// Randomly select a popular User-Agent to avoid a static fingerprint.
+		n, err := rand.Int(rand.Reader, big.NewInt(int64(len(popularUserAgents))))
+		if err != nil {
+			// Fallback to the first one on the rare chance of a crypto/rand error.
+			userAgent = popularUserAgents[0]
+		} else {
+			userAgent = popularUserAgents[n.Int64()]
+		}
 	}
 	req.Header.Set("User-Agent", userAgent)
 
