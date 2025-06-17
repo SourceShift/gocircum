@@ -16,8 +16,12 @@ canary_domains:
   - "www.apple.com"
 
 fingerprints:
-  - id: "default_tcp_utls_randomized"
-    description: "Default TCP strategy with hardened uTLS (Randomized ClientHello)"
+  - id: "df_google_utls_randomized"
+    description: "Domain Fronting via Google with uTLS (Randomized)"
+    domain_fronting:
+      enabled: true
+      front_domain: "www.google.com:443"
+      covert_target: "www.youtube.com"
     transport:
       protocol: "tcp"
     tls:
@@ -26,8 +30,12 @@ fingerprints:
       min_version: "1.3"
       max_version: "1.3"
 
-  - id: "default_tcp_utls_chrome"
-    description: "Default TCP with uTLS Chrome"
+  - id: "df_google_utls_chrome"
+    description: "Domain Fronting via Google with uTLS Chrome"
+    domain_fronting:
+      enabled: true
+      front_domain: "www.google.com:443"
+      covert_target: "www.youtube.com"
     transport:
       protocol: "tcp"
     tls:
@@ -37,8 +45,12 @@ fingerprints:
       min_version: "1.3"
       max_version: "1.3"
 
-  - id: "tcp_fragment_utls_firefox"
-    description: "TCP with fragmentation and uTLS Firefox"
+  - id: "df_google_fragment_utls_firefox"
+    description: "Domain Fronting (Google) with fragmentation and uTLS Firefox"
+    domain_fronting:
+      enabled: true
+      front_domain: "www.google.com:443"
+      covert_target: "www.youtube.com"
     transport:
       protocol: "tcp"
       fragmentation:
@@ -53,8 +65,12 @@ fingerprints:
       min_version: "1.3"
       max_version: "1.3"
 
-  - id: "tcp_fragment_even_utls_safari"
-    description: "TCP with even fragmentation and uTLS Safari"
+  - id: "df_google_fragment_even_utls_safari"
+    description: "Domain Fronting (Google) with even fragmentation and uTLS Safari"
+    domain_fronting:
+      enabled: true
+      front_domain: "www.google.com:443"
+      covert_target: "www.youtube.com"
     transport:
       protocol: "tcp"
       fragmentation:
@@ -68,12 +84,12 @@ fingerprints:
       min_version: "1.3"
       max_version: "1.3"
 
-  - id: "domain_fronting_utls_chrome"
-    description: "Domain fronting with uTLS Chrome"
+  - id: "df_amazon_utls_chrome"
+    description: "Domain Fronting via Amazon with uTLS Chrome"
     domain_fronting:
       enabled: true
-      front_domain: "www.google.com"
-      covert_target: "www.youtube.com"
+      front_domain: "a0.awsstatic.com"
+      covert_target: "www.amazon.com"
     transport:
       protocol: "tcp"
     tls:

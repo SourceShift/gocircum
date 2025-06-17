@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
-	"gocircum/pkg/logging"
 	"net"
 	"time"
 )
@@ -19,8 +18,7 @@ type TCPConfig struct {
 
 // TCPTransport implements the Transport interface for TCP connections.
 type TCPTransport struct {
-	dialer    *net.Dialer
-	tlsConfig *tls.Config
+	dialer *net.Dialer
 }
 
 // NewTCPTransport creates a new TCPTransport with the given configuration.
@@ -30,51 +28,22 @@ func NewTCPTransport(cfg *TCPConfig) (*TCPTransport, error) {
 			Timeout:   cfg.DialTimeout,
 			KeepAlive: cfg.KeepAlive,
 		},
-		tlsConfig: cfg.TLSConfig,
 	}
 	return t, nil
 }
 
-// DialContext connects to the given address using TCP. If TLS config is provided,
-// it performs a TLS handshake.
+// DialContext connects to the given address using raw TCP. It no longer handles TLS.
+// TLS negotiation is now handled exclusively by higher-level components (e.g., engine.NewTLSClient)
+// to enforce the uTLS security policy.
 func (t *TCPTransport) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
 	conn, err := t.dialer.DialContext(ctx, network, address)
 	if err != nil {
 		return nil, fmt.Errorf("tcp dial failed: %w", err)
 	}
-
-	if t.tlsConfig != nil {
-		clientTLSConfig := t.tlsConfig.Clone()
-
-		// If the ServerName is not explicitly pre-configured, we derive it.
-		// This allows callers (like the ranker) to set the correct SNI (hostname)
-		// even when dialing an IP address.
-		if clientTLSConfig.ServerName == "" {
-			host, _, err := net.SplitHostPort(address)
-			if err != nil {
-				logging.GetLogger().Debug("could not split host/port, falling back to using address as host", "address", address, "error", err)
-				host = address
-			}
-			// Using an IP address as an SNI is a major fingerprint. We log a warning.
-			if net.ParseIP(host) != nil {
-				logging.GetLogger().Warn("SECURITY WARNING: Using an IP address for TLS SNI. This is highly fingerprintable.", "sni", host)
-			}
-			clientTLSConfig.ServerName = host
-		}
-
-		tlsConn := tls.Client(conn, clientTLSConfig)
-		if err := tlsConn.HandshakeContext(ctx); err != nil {
-			_ = conn.Close()
-			return nil, fmt.Errorf("tls handshake failed: %w", err)
-		}
-		return tlsConn, nil
-	}
-
 	return conn, nil
 }
 
-// Listen creates a listener on the specified network address. If a TLS config
-// is provided, it returns a TLS listener.
+// Listen creates a listener on the specified network address. It no longer handles TLS.
 func (t *TCPTransport) Listen(ctx context.Context, network, address string) (net.Listener, error) {
 	select {
 	case <-ctx.Done():
@@ -89,10 +58,6 @@ func (t *TCPTransport) Listen(ctx context.Context, network, address string) (net
 
 	// Wrap the listener to respect context cancellation for Accept() calls.
 	wrapper := newTCPListenerWrapper(ctx, ln)
-
-	if t.tlsConfig != nil {
-		return tls.NewListener(wrapper, t.tlsConfig), nil
-	}
 
 	return wrapper, nil
 }
