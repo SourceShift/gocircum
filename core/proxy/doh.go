@@ -186,6 +186,16 @@ func (r *DoHResolver) Resolve(ctx context.Context, name string) (context.Context
 			lastErr = fmt.Errorf("invalid URL for provider %s: %w", provider.Name, err)
 			continue
 		}
+
+		// CRITICAL FIX: Enforce HTTPS to prevent unencrypted DNS leaks.
+		// A provider with an http:// scheme would cause the http.Client to fall back
+		// to an insecure transport, leaking the DNS query.
+		if reqURL.Scheme != "https" {
+			logging.GetLogger().Warn("Skipping DoH provider with insecure scheme", "provider", provider.Name, "url", provider.URL)
+			lastErr = fmt.Errorf("insecure scheme for DoH provider %s", provider.Name)
+			continue
+		}
+
 		q := reqURL.Query()
 		q.Set("name", name)
 		reqURL.RawQuery = q.Encode()
