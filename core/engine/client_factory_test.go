@@ -8,31 +8,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestBuildStandardTLSConfig(t *testing.T) {
-	t.Run("DefaultIsSecure", func(t *testing.T) {
-		cfg := &config.TLS{MinVersion: "1.2", MaxVersion: "1.3"}
-		tlsConfig, err := buildStandardTLSConfig("example.com", cfg, nil)
-		require.NoError(t, err)
-		assert.False(t, tlsConfig.InsecureSkipVerify)
-	})
-
-	t.Run("InsecureIsIgnored", func(t *testing.T) {
-		skipVerify := true
-		cfg := &config.TLS{SkipVerify: &skipVerify, MinVersion: "1.2", MaxVersion: "1.3"}
-		tlsConfig, err := buildStandardTLSConfig("example.com", cfg, nil)
-		require.NoError(t, err)
-		assert.False(t, tlsConfig.InsecureSkipVerify)
-	})
-
-	t.Run("ExplicitlySecure", func(t *testing.T) {
-		skipVerify := false
-		cfg := &config.TLS{SkipVerify: &skipVerify, MinVersion: "1.2", MaxVersion: "1.3"}
-		tlsConfig, err := buildStandardTLSConfig("example.com", cfg, nil)
-		require.NoError(t, err)
-		assert.False(t, tlsConfig.InsecureSkipVerify)
-	})
-}
-
 func TestBuildUTLSConfig(t *testing.T) {
 	t.Run("DefaultIsSecure", func(t *testing.T) {
 		cfg := &config.TLS{MinVersion: "1.2", MaxVersion: "1.3"}

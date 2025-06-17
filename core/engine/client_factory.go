@@ -1,7 +1,6 @@
 package engine
 
 import (
-	"crypto/tls"
 	"crypto/x509"
 	"fmt"
 	"gocircum/core/config"
@@ -23,12 +22,9 @@ func NewTLSClient(conn net.Conn, cfg *config.TLS, serverName string, rootCAs *x5
 	case "utls":
 		return newUTLSClient(conn, serverName, cfg, rootCAs)
 	case "go-stdlib", "stdlib":
-		logging.GetLogger().Warn("SECURITY WARNING: 'go-stdlib' TLS library selected. This library's TLS ClientHello fingerprint is easily detectable by DPI systems. Consider using 'utls' with a randomized ClientHelloID for better circumvention.",
-			"fingerprint_id", cfg.ClientHelloID, // Provide context
-			"advice", "Change 'tls.library' to 'utls' and specify a 'client_hello_id' like 'HelloRandomized'.",
-		)
-		// Fallback to standard TLS client, but it's not recommended for censorship circumvention.
-		return newStandardTLSClient(conn, serverName, cfg, rootCAs)
+		// DISALLOWED: The standard library's TLS ClientHello is easily fingerprinted by censors.
+		// We must not permit its use for client-side connections in a circumvention tool.
+		return nil, fmt.Errorf("security policy violation: 'go-stdlib' is not a permitted TLS library for client connections due to fingerprinting risk. Use 'utls' instead")
 	case "uquic":
 		// For QUIC, the TLS config is part of the transport.
 		// This case is handled by the transport layer itself.
@@ -44,20 +40,6 @@ func NewTLSClient(conn net.Conn, cfg *config.TLS, serverName string, rootCAs *x5
 		// For now, we'll return an error to force explicit configuration or better defaults.
 		return nil, fmt.Errorf("unsupported or unspecified TLS library: %s. Must be 'utls' or 'uquic' for client. 'go-stdlib' is deprecated for circumvention.", cfg.Library)
 	}
-}
-
-func newStandardTLSClient(conn net.Conn, serverName string, cfg *config.TLS, rootCAs *x509.CertPool) (net.Conn, error) {
-	tlsConfig, err := buildStandardTLSConfig(serverName, cfg, rootCAs)
-	if err != nil {
-		return nil, fmt.Errorf("failed to build standard TLS config: %w", err)
-	}
-
-	tlsConn := tls.Client(conn, tlsConfig)
-	if err := tlsConn.Handshake(); err != nil {
-		_ = conn.Close()
-		return nil, fmt.Errorf("standard TLS handshake failed: %w", err)
-	}
-	return tlsConn, nil
 }
 
 func newUTLSClient(conn net.Conn, serverName string, cfg *config.TLS, rootCAs *x509.CertPool) (net.Conn, error) {
@@ -77,33 +59,6 @@ func newUTLSClient(conn net.Conn, serverName string, cfg *config.TLS, rootCAs *x
 		return nil, fmt.Errorf("uTLS handshake failed: %w", err)
 	}
 	return uconn, nil
-}
-
-func buildStandardTLSConfig(serverName string, cfg *config.TLS, rootCAs *x509.CertPool) (*tls.Config, error) {
-	// For uTLS, we log a warning but always enforce verification.
-	if cfg.SkipVerify != nil && *cfg.SkipVerify {
-		logging.GetLogger().Warn("SECURITY WARNING: 'skip_verify: true' is configured, but this option is deprecated and IGNORED. TLS certificate validation is enforced.",
-			"risk", "Man-in-the-Middle (MITM) attacks",
-			"advice", "Remove 'skip_verify: true' from your configuration. This option is for testing only.",
-		)
-	}
-
-	minVersion, ok := constants.TLSVersionMap[cfg.MinVersion]
-	if !ok {
-		return nil, fmt.Errorf("unknown min TLS version: %s", cfg.MinVersion)
-	}
-	maxVersion, ok := constants.TLSVersionMap[cfg.MaxVersion]
-	if !ok {
-		return nil, fmt.Errorf("unknown max TLS version: %s", cfg.MaxVersion)
-	}
-
-	return &tls.Config{
-		ServerName:         serverName,
-		InsecureSkipVerify: false,
-		RootCAs:            rootCAs,
-		MinVersion:         minVersion,
-		MaxVersion:         maxVersion,
-	}, nil
 }
 
 func buildUTLSConfig(serverName string, cfg *config.TLS, rootCAs *x509.CertPool) (*utls.Config, error) {

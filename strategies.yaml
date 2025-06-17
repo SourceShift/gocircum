@@ -27,19 +27,6 @@ fingerprints:
       max_version: "1.3"
       skip_verify: false
 
-  # Consider removing or strongly warning against `default_tcp_stdlib` in production configs.
-  # For specific use cases (e.g., server side, or specific network tests), it might remain,
-  # but with explicit understanding of its fingerprintability.
-  # - id: "default_tcp_stdlib"
-  #   description: "Default TCP with stdlib TLS 1.3"
-  #   transport:
-  #     protocol: "tcp"
-  #   tls:
-  #     library: "stdlib"
-  #     min_version: "1.3"
-  #     max_version: "1.3"
-  #     skip_verify: false
-
   - id: "default_tcp_utls_chrome"
     description: "Default TCP with uTLS Chrome"
     transport:
