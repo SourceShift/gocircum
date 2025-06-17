@@ -1,8 +1,35 @@
 # gocircum
 
-A modular censorship circumvention framework designed to be resilient and adaptable.
+<p align="center">
+  <img src="assets/gocircum.png" alt="gocircum logo" width="200"/>
+</p>
+
+[![Build Status](https://img.shields.io/github/actions/workflow/status/SourceShift/gocircum/main.yml?branch=main&style=for-the-badge)](https://github.com/SourceShift/gocircum/actions/workflows/main.yml)
+[![Go Report Card](https://img.shields.io/go/report-card/github.com/SourceShift/gocircum?style=for-the-badge)](https://goreportcard.com/report/github.com/SourceShift/gocircum)
+[![Coverage](https://img.shields.io/gocover/io/github/SourceShift/gocircum?style=for-the-badge)](https://gocover.io/github.com/SourceShift/gocircum)
+[![Latest Release](https://img.shields.io/github/v/release/SourceShift/gocircum?style=for-the-badge)](https://github.com/SourceShift/gocircum/releases)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=for-the-badge)](https://opensource.org/licenses/MIT)
+
+A modular and adaptable censorship circumvention framework designed for resilience against sophisticated network adversaries.
 
 ---
+
+## Table of Contents
+
+- [Vision](#vision)
+- [The Problem](#the-problem)
+- [The Solution](#the-solution)
+- [Key Features](#key-features)
+- [Architecture Overview](#architecture-overview)
+- [Getting Started](#getting-started)
+  - [Installation](#installation)
+- [Usage (CLI)](#usage-cli)
+  - [Testing Strategies](#testing-strategies)
+  - [Running the Proxy](#running-the-proxy)
+- [Configuration](#configuration)
+- [Development](#development)
+- [Contributing](#contributing)
+- [License](#license)
 
 ## Vision
 
@@ -10,13 +37,13 @@ To empower individuals living under internet censorship with a resilient, adapta
 
 ## The Problem
 
-State-level censorship systems use Deep Packet Inspection (DPI) to identify and block circumvention tools by fingerprinting their network traffic, particularly the initial TLS ClientHello message. Existing tools can be rigid and quickly become obsolete as censors adapt their blocking strategies.
+State-level censorship systems use Deep Packet Inspection (DPI) to identify and block circumvention tools by fingerprinting their network traffic, particularly the initial TLS `ClientHello` message. Many existing tools can be rigid and quickly become obsolete as censors adapt their blocking strategies.
 
 ## The Solution
 
 **gocircum** is a modular framework built around a core Go library. It allows for the rapid definition, testing, and deployment of new evasion techniques. Its key features are designed to counter adaptive censorship:
 
-- **Configurable Evasion Strategies**: Instead of hardcoded logic, `gocircum` uses a simple YAML file (`strategies.yaml`) to define how it should disguise traffic. This allows users and researchers to quickly adapt to new blocking methods without needing to recompile the application.
+- **Configurable Evasion Strategies**: Instead of hardcoded logic, `gocircum` uses a simple YAML file (`strategies.yaml`) to define how it should disguise traffic. This allows users and researchers to quickly adapt to new blocking methods without needing to recompile the application. **Crucially, all strategies enforce domain fronting to prevent SNI-based blocking.**
 - **Automated Strategy Ranking**: For non-technical users, the framework can automatically test which evasion strategies are currently working and select the best one. This provides a simple "one-click" experience.
 - **Multiple Frontends**: The core library powers different applications for different users:
     - A powerful **Command-Line Interface (CLI)** for technical users to test networks and run a local proxy.
@@ -24,164 +51,193 @@ State-level censorship systems use Deep Packet Inspection (DPI) to identify and 
 
 ## Key Features
 
-- **Core Circumvention Library (`gocircum`)**: A self-contained, headless Go library that provides all core functionality. It can be easily imported into other Go projects.
-- **YAML-based Strategy Configuration**: Define and enable different transport protocols (`tcp`, `quic`), TLS libraries (`go-stdlib`, `utls`, `uquic`), and middlewares (like packet fragmentation) in a simple text file.
-- **Command-Line Interface (`gocircum-cli`)**: A feature-rich CLI for technical users.
-    - `test`: Run all enabled strategies and report on their success and performance.
-    - `proxy`: Start a local SOCKS5 proxy using the best available strategy.
-- **Automated Best-Strategy Selection**: A built-in "Ranker" module silently tests strategies to find the fastest, most reliable one for the user's current network conditions.
-- **Mobile-Ready**: Generates `.aar` and `.xcframework` artifacts for easy integration into Android and iOS applications.
-- **Proof-of-Concept Mobile App**: A minimal GUI app demonstrating the one-click connect experience for non-technical users.
+- **YAML-based Strategies**: Define complex evasion profiles in a simple text file.
+  - **Mandatory Domain Fronting**: All strategies are enforced to use domain fronting, hiding the true destination from network observers by separating the TLS SNI from the HTTP Host header.
+  - **ClientHello Fragmentation**: Obfuscate the TLS handshake by fragmenting the `ClientHello` packet with configurable sizing and delays.
+  - **uTLS Fingerprinting**: Mimic popular browser fingerprints (Chrome, Firefox, Safari) to blend in with normal traffic using `uTLS`.
+- **Automated Strategy Ranking**: The `test` command probes all defined strategies against real-world domains and ranks them by success and latency, finding the optimal path for the current network conditions.
+- **Secure DNS Resolution**: All internal DNS lookups are performed over DNS-over-HTTPS (DoH) using domain-fronted providers to prevent DNS-based blocking and leaks.
+- **Cross-Platform CLI (`gocircum-cli`)**: A powerful command-line tool for testing, debugging, and running a local SOCKS5 proxy on Windows, macOS, and Linux.
+- **Mobile-Ready Library**: The core engine is designed to be compiled as a mobile library (`.aar` for Android, `.xcframework` for iOS) for easy integration into mobile apps.
 
-## Who is gocircum for?
+## Architecture Overview
 
-`gocircum` is designed for two main groups:
+The project is structured for modularity and ease of extension:
 
-1.  **Students, Activists, and Citizens**: Individuals in censored regions who need a simple, reliable tool that just works. For them, `gocircum` powers easy-to-use mobile apps with a single "Connect" button.
-2.  **Researchers and Developers**: Technical users who analyze censorship and need a powerful, scriptable tool to probe networks, test new evasion techniques, and build custom circumvention tools.
+```
+gocircum/
+├── cli/            # Command-line interface entry point
+├── core/           # The heart of the engine
+│   ├── api.go      # High-level engine API
+│   ├── config/     # YAML configuration loading and validation
+│   ├── engine/     # Connection and transport factory logic
+│   ├── proxy/      # SOCKS5 server and secure DoH resolver
+│   └── ranker/     # Strategy testing and ranking logic
+├── mobile/         # Bindings for mobile applications
+├── interfaces/     # Public Go interfaces for the engine
+├── pkg/            # Shared utility packages (e.g., logging)
+└── strategies.yaml # Default evasion strategy definitions
+```
 
 ## Getting Started
 
-### Prerequisites
+### Installation
 
-- Go (latest version recommended)
+#### From Pre-compiled Binaries (Recommended)
 
-### Installing the CLI (`gocircum-cli`)
+You can download the latest pre-compiled `gocircum-cli` binary for your operating system from the [**GitHub Releases**](https://github.com/SourceShift/gocircum/releases) page.
 
-```bash
-# Clone the repository
-git clone https://github.com/your-repo/gocircum.git
-cd gocircum/cli
+#### From Source
 
-# Build and install
-go build -o gocircum-cli
-# Optional: Move the binary to your system's PATH
-# sudo mv gocircum-cli /usr/local/bin/
+**Prerequisites:**
+- [Go](https://go.dev/doc/install) (version 1.21+)
+- `make`
+
+1.  **Clone the repository:**
+    ```sh
+    git clone https://github.com/SourceShift/gocircum.git
+    cd gocircum
+    ```
+
+2.  **Build the CLI:**
+    ```sh
+    make build-cli
+    ```
+    The binary will be available at `./bin/gocircum-cli`. You can move it to your system's PATH for easier access:
+    ```sh
+    sudo mv ./bin/gocircum-cli /usr/local/bin/
+    ```
+
+## Usage (CLI)
+
+The `gocircum-cli` provides two main subcommands: `test` and `proxy`.
+
+### Testing Strategies
+
+The `test` command runs through all strategies defined in `strategies.yaml` and reports their performance. This is useful for understanding which evasion techniques work on your current network.
+
+**Command:**
+```sh
+gocircum-cli test --config strategies.yaml
 ```
 
-### Using the Library
-
-To use `gocircum` in your own Go project:
-
-```bash
-go get -u github.com/your-repo/gocircum
+**Example Output:**
+```
+ID                               SUCCESS  LATENCY    DESCRIPTION
+df_google_utls_chrome            OK       98.123ms   Domain Fronting via Google with uTLS Chrome
+df_google_fragment_utls_firefox  OK       154.456ms  Domain Fronting (Google) with fragmentation and uTLS Firefox
+df_amazon_utls_chrome            FAIL     0s         Domain Fronting via Amazon with uTLS Chrome
+...
 ```
 
-```go
-package main
+### Running the Proxy
 
-import (
-	"context"
-	"fmt"
-	"os"
-	"os/signal"
-	"syscall"
+The `proxy` command starts a local SOCKS5 proxy. You can either specify a strategy by its ID or let the engine automatically find and use the best one.
 
-	"github.com/your-repo/gocircum"
-	"github.com/your-repo/gocircum/core/config"
-	"github.com/your-repo/gocircum/pkg/logging"
-)
-
-func main() {
-	// Initialize a logger
-	logger := logging.GetLogger()
-
-	// Load fingerprints from the configuration file
-	fingerprints, err := config.LoadFingerprintsFromFile("strategies.yaml")
-	if err != nil {
-		logger.Error("Failed to load fingerprints", "error", err)
-		panic(err)
-	}
-
-	// Create a new engine instance
-	engine, err := gocircum.NewEngine(fingerprints, logger)
-	if err != nil {
-		logger.Error("Failed to create engine", "error", err)
-		panic(err)
-	}
-
-	// Example: Test all available strategies
-	fmt.Println("Testing strategies...")
-	results, err := engine.TestStrategies(context.Background())
-	if err != nil {
-		logger.Error("Failed to test strategies", "error", err)
-	} else {
-		for _, r := range results {
-			fmt.Printf("  - ID: %s, Success: %v, Latency: %s\n", r.Fingerprint.ID, r.Success, r.Latency)
-		}
-	}
-
-	// Start the proxy in the background
-	fmt.Println("Starting proxy on 127.0.0.1:1080...")
-	go func() {
-		if err := engine.Start("127.0.0.1:1080"); err != nil {
-			logger.Error("Engine failed to start", "error", err)
-		}
-	}()
-
-	// Wait for a shutdown signal
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-	<-sigCh
-
-	// Stop the engine gracefully
-	fmt.Println("Shutting down...")
-	if err := engine.Stop(); err != nil {
-		logger.Error("Failed to stop engine gracefully", "error", err)
-	}
-}
+**Run with the best available strategy:**
+(The engine will first run tests to find the fastest working strategy)
+```sh
+gocircum-cli proxy
+INFO Starting SOCKS5 proxy address=127.0.0.1:1080
 ```
+
+**Run with a specific strategy ID:**
+```sh
+gocircum-cli proxy --strategy df_google_utls_chrome
+INFO SOCKS5 proxy listening address=127.0.0.1:1080
+```
+
+**Run on a different address:**
+```sh
+gocircum-cli proxy --addr 127.0.0.1:9050
+```
+
+Once running, configure your applications to use the SOCKS5 proxy at `127.0.0.1:1080` (or the address you specified).
 
 ## Configuration
 
-The behavior of `gocircum` is controlled by `strategies.yaml`. Here is an example snippet:
+The framework's behavior is entirely controlled by `strategies.yaml`.
 
 ```yaml
-fingerprints:
-  - id: "default_tcp_utls_chrome"
-    description: "Default TCP with uTLS Chrome"
-    transport:
-      protocol: "tcp"
-    tls:
-      library: "utls"
-      client_hello_id: "HelloChrome_Auto"
-      min_version: "1.3"
-      max_version: "1.3"
+# DNS-over-HTTPS providers used for secure, internal DNS resolution.
+# At least one is required. They can also use domain fronting.
+doh_providers:
+  - name: "Cloudflare"
+    url: "https://dns.cloudflare.com/dns-query"
+    server_name: "dns.cloudflare.com" # The real DoH server name (for the Host header)
+    bootstrap: ["1.1.1.1:443", "1.0.0.1:443"] # Hardcoded IPs to avoid initial DNS lookup
 
-  - id: "tcp_fragment_utls_firefox"
-    description: "TCP with fragmentation and uTLS Firefox"
+# A list of high-availability domains to test strategies against.
+canary_domains:
+  - "www.cloudflare.com"
+  - "www.google.com"
+
+# A list of evasion strategies (fingerprints).
+fingerprints:
+  - id: "df_google_utls_chrome"
+    description: "Domain Fronting via Google with uTLS Chrome"
+    # Domain fronting is mandatory for all strategies.
+    domain_fronting:
+      enabled: true
+      front_domain: "www.google.com:443" # The "benign" domain for the TLS SNI.
+      covert_target: "www.youtube.com" # The domain for the encrypted HTTP Host header.
+    # Low-level transport configuration.
     transport:
-      protocol: "tcp"
+      protocol: "tcp" # Can be "tcp" or "quic".
+      # Optional fragmentation of the initial data packet (ClientHello).
       fragmentation:
+        algorithm: "static" # "static" (uses packet_sizes) or "even" (divides into N chunks).
         packet_sizes:
-          - [10, 20]
-          - [30, 50]
-        delay_ms: [5, 15]
+          - [10, 20]   # Send a chunk of 10-20 bytes.
+          - [30, 50]   # Then send a chunk of 30-50 bytes.
+        delay_ms: [5, 15] # Wait 5-15ms between sending chunks.
+    # TLS layer configuration.
     tls:
-      library: "utls"
-      client_hello_id: "HelloFirefox_Auto"
+      library: "utls" # Enforced to be "utls" to avoid fingerprinting.
+      client_hello_id: "HelloChrome_Auto" # Mimics a Chrome browser's ClientHello.
       min_version: "1.3"
       max_version: "1.3"
 ```
 
-## Platform Support
+## Development
 
--   **CLI**: Windows (amd64), macOS (amd64, arm64), Linux (amd64, arm64).
--   **Mobile**: Android API level 21+, iOS 12+.
+**Prerequisites:**
+- [Go](https://go.dev/doc/install) (version 1.21+)
+- `make`
+- `gomobile` and `golangci-lint`
+
+1.  **Install dependencies:**
+    ```sh
+    make install-deps
+    ```
+
+2.  **Run tests:**
+    ```sh
+    make test
+    ```
+
+3.  **Run tests with the race detector:**
+    ```sh
+    make test-race
+    ```
+
+4.  **Lint the codebase:**
+    ```sh
+    make lint
+    ```
 
 ## Contributing
 
-Contributions are welcome! Whether you're adding new evasion strategies, improving the core library, or fixing bugs, your help is valuable. We aim to foster a strong community to keep the tool effective. Please feel free to open an issue or submit a pull request.
+Contributions are highly welcome! Whether you're adding new evasion strategies, improving the core library, or fixing bugs, your help is valuable. Please feel free to open an issue or submit a pull request.
 
-## Out of Scope for MVP
-
-To ensure a focused initial release, the following features are not part of the MVP:
-
--   A dedicated desktop GUI application.
--   Collection of detailed usage analytics or telemetry.
--   Support for proxy protocols other than SOCKS5.
--   A mechanism for automatically and securely updating the strategy list.
+1.  **Fork the repository.**
+2.  **Create a new branch:** `git checkout -b feature/your-feature-name`
+3.  **Make your changes.**
+4.  **Run tests and lint:** `make test && make lint`
+5.  **Commit your changes:** `git commit -m "feat: Describe your feature"`
+6.  **Push to the branch:** `git push origin feature/your-feature-name`
+7.  **Open a pull request.**
 
 ## License
 
-This project is open-source and subject to public audit. (A specific license like MIT or Apache 2.0 will be chosen). 
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
