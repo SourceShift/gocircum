@@ -6,7 +6,7 @@
 
 [![Build Status](https://img.shields.io/github/actions/workflow/status/SourceShift/gocircum/main.yml?branch=main&style=for-the-badge)](https://github.com/SourceShift/gocircum/actions/workflows/main.yml)
 [![Go Report Card](https://img.shields.io/go/report-card/github.com/SourceShift/gocircum?style=for-the-badge)](https://goreportcard.com/report/github.com/SourceShift/gocircum)
-[![Coverage](https://img.shields.io/gocover/io/github/SourceShift/gocircum?style=for-the-badge)](https://gocover.io/github.com/SourceShift/gocircum)
+[![Coverage Status](https://img.shields.io/codecov/c/github/SourceShift/gocircum?style=for-the-badge)](https://app.codecov.io/gh/SourceShift/gocircum)
 [![Latest Release](https://img.shields.io/github/v/release/SourceShift/gocircum?style=for-the-badge)](https://github.com/SourceShift/gocircum/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=for-the-badge)](https://opensource.org/licenses/MIT)
 
