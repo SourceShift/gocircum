@@ -3,7 +3,6 @@ package proxy
 import (
 	"context"
 	"crypto/rand"
-	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
 	"fmt"
@@ -15,6 +14,8 @@ import (
 	"net/url"
 	"sync"
 	"time"
+
+	utls "github.com/refraction-networking/utls"
 )
 
 var (
@@ -61,12 +62,56 @@ func (r *DoHResolver) getShuffledProviders() []config.DoHProvider {
 	return shuffled
 }
 
-var createClientForProvider = func(provider config.DoHProvider) (*http.Client, error) {
+// dialTLSWithUTLS creates a TLS connection using uTLS to resist fingerprinting.
+// It uses the provider's bootstrap IPs to make the initial connection, avoiding DNS leaks.
+func dialTLSWithUTLS(ctx context.Context, network, addr string, cfg *utls.Config, provider config.DoHProvider) (net.Conn, error) {
+	// This dialer is for the raw TCP connection.
 	dialer := &net.Dialer{
 		Timeout:   10 * time.Second,
 		KeepAlive: 10 * time.Second,
 	}
 
+	// The host from `addr` is ignored; we use only the port and connect to the bootstrap IPs.
+	_, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		port = "443" // Default to 443 if split fails.
+	}
+
+	shuffledBootstrap := make([]string, len(provider.Bootstrap))
+	copy(shuffledBootstrap, provider.Bootstrap)
+
+	// Fisher-Yates shuffle for bootstrap IPs.
+	for i := len(shuffledBootstrap) - 1; i > 0; i-- {
+		j, err := rand.Int(rand.Reader, big.NewInt(int64(i+1)))
+		if err != nil {
+			return nil, fmt.Errorf("failed to shuffle bootstrap IPs for %s: %w", provider.Name, err)
+		}
+		shuffledBootstrap[i], shuffledBootstrap[j.Int64()] = shuffledBootstrap[j.Int64()], shuffledBootstrap[i]
+	}
+
+	var lastErr error
+	for _, bootstrapAddr := range shuffledBootstrap {
+		// Re-join the bootstrap IP with the correct port.
+		bootstrapTarget := net.JoinHostPort(bootstrapAddr, port)
+		rawConn, err := dialer.DialContext(ctx, network, bootstrapTarget)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+
+		// Use a common browser fingerprint for DoH requests.
+		uconn := utls.UClient(rawConn, cfg, utls.HelloChrome_Auto)
+		if err := uconn.HandshakeContext(ctx); err != nil {
+			_ = rawConn.Close()
+			lastErr = fmt.Errorf("uTLS handshake with %s failed for DoH: %w", bootstrapTarget, err)
+			continue
+		}
+		return uconn, nil
+	}
+	return nil, fmt.Errorf("failed to connect to any bootstrap server for %s: %w", provider.Name, lastErr)
+}
+
+var createClientForProvider = func(provider config.DoHProvider) (*http.Client, error) {
 	// If a front domain is specified, use it for the TLS SNI. Otherwise, use the server name.
 	// This enables domain fronting for DoH requests.
 	sni := provider.ServerName
@@ -74,41 +119,27 @@ var createClientForProvider = func(provider config.DoHProvider) (*http.Client, e
 		sni = provider.FrontDomain
 	}
 
-	tlsConfig := &tls.Config{ServerName: sni}
+	// Base uTLS config.
+	utlsConfig := &utls.Config{
+		ServerName:         sni,
+		InsecureSkipVerify: false, // Always verify certs.
+	}
 	if provider.RootCA != "" {
 		caCertPool := x509.NewCertPool()
 		if ok := caCertPool.AppendCertsFromPEM([]byte(provider.RootCA)); !ok {
 			return nil, fmt.Errorf("failed to parse provided RootCA for DoH provider '%s'", provider.Name)
 		}
-		tlsConfig.RootCAs = caCertPool
+		utlsConfig.RootCAs = caCertPool
 	}
 
 	transport := &http.Transport{
-		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-			shuffledBootstrap := make([]string, len(provider.Bootstrap))
-			copy(shuffledBootstrap, provider.Bootstrap)
-
-			// Fisher-Yates shuffle for bootstrap IPs.
-			//nolint:gosec // Using math/rand is fine for non-crypto purposes, but we use crypto/rand here for security.
-			for i := len(shuffledBootstrap) - 1; i > 0; i-- {
-				j, err := rand.Int(rand.Reader, big.NewInt(int64(i+1)))
-				if err != nil {
-					return nil, fmt.Errorf("failed to shuffle bootstrap IPs for %s: %w", provider.Name, err)
-				}
-				shuffledBootstrap[i], shuffledBootstrap[j.Int64()] = shuffledBootstrap[j.Int64()], shuffledBootstrap[i]
-			}
-
-			var lastErr error
-			for _, bootstrapAddr := range shuffledBootstrap {
-				conn, err := dialer.DialContext(ctx, "tcp", bootstrapAddr)
-				if err == nil {
-					return conn, nil
-				}
-				lastErr = err
-			}
-			return nil, fmt.Errorf("failed to connect to any bootstrap server for %s: %w", provider.Name, lastErr)
+		// CRITICAL FIX: Use DialTLSContext to force uTLS for the handshake.
+		// This is the only dialer that will be used for HTTPS requests.
+		DialTLSContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			return dialTLSWithUTLS(ctx, network, addr, utlsConfig, provider)
 		},
-		TLSClientConfig: tlsConfig,
+		// We are not setting TLSClientConfig or DialContext, as they are ignored
+		// by the transport when DialTLSContext is provided.
 	}
 
 	return &http.Client{

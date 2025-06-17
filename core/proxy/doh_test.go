@@ -3,19 +3,23 @@ package proxy
 import (
 	"context"
 	"crypto/x509"
+	"encoding/pem"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	"gocircum/core/config"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func certToPEM(cert *x509.Certificate) string {
+	return string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: cert.Raw}))
+}
 
 func TestGetShuffledProviders(t *testing.T) {
 	providers := []config.DoHProvider{
@@ -57,6 +61,11 @@ func TestDoHResolver_Resolve_Failover(t *testing.T) {
 	resolver, err := NewDoHResolver(dummyProviders)
 	require.NoError(t, err)
 
+	// We need to provide the test server's certificate to the client.
+	// The new uTLS client uses the RootCA field on the provider.
+	// We create a PEM string containing both certs.
+	allCertsPEM := certToPEM(failingServer.Certificate()) + certToPEM(workingServer.Certificate())
+
 	// Override providers for test
 	resolver.providers = []config.DoHProvider{
 		{
@@ -64,30 +73,15 @@ func TestDoHResolver_Resolve_Failover(t *testing.T) {
 			URL:        failingServer.URL,
 			ServerName: "example.com",
 			Bootstrap:  []string{failingServer.Listener.Addr().String()},
+			RootCA:     allCertsPEM,
 		},
 		{
 			Name:       "Working",
 			URL:        workingServer.URL,
 			ServerName: "example.com",
 			Bootstrap:  []string{workingServer.Listener.Addr().String()},
+			RootCA:     allCertsPEM,
 		},
-	}
-
-	// Because we use a test server, we need to add its cert to the trust pool for the HTTP client.
-	// We can do this by modifying the createClientForProvider function for the test.
-	originalCreateClient := createClientForProvider
-	defer func() { createClientForProvider = originalCreateClient }()
-	createClientForProvider = func(provider config.DoHProvider) (*http.Client, error) {
-		client, err := originalCreateClient(provider)
-		if err != nil {
-			return nil, err
-		}
-		transport := client.Transport.(*http.Transport)
-		certpool := x509.NewCertPool()
-		certpool.AddCert(workingServer.Certificate())
-		certpool.AddCert(failingServer.Certificate())
-		transport.TLSClientConfig.RootCAs = certpool
-		return client, nil
 	}
 
 	_, ip, err := resolver.Resolve(context.Background(), "example.com")
@@ -111,38 +105,27 @@ func TestDoHResolver_Resolve_AllFail(t *testing.T) {
 	resolver, err := NewDoHResolver(dummyProviders)
 	require.NoError(t, err)
 
+	allCertsPEM := certToPEM(failingServer1.Certificate()) + certToPEM(failingServer2.Certificate())
+
 	resolver.providers = []config.DoHProvider{
 		{
 			Name:       "Failing1",
 			URL:        failingServer1.URL,
 			ServerName: "example.com",
 			Bootstrap:  []string{failingServer1.Listener.Addr().String()},
+			RootCA:     allCertsPEM,
 		},
 		{
 			Name:       "Failing2",
 			URL:        failingServer2.URL,
 			ServerName: "example.com",
 			Bootstrap:  []string{failingServer2.Listener.Addr().String()},
+			RootCA:     allCertsPEM,
 		},
 	}
 
-	originalCreateClient := createClientForProvider
-	defer func() { createClientForProvider = originalCreateClient }()
-	createClientForProvider = func(provider config.DoHProvider) (*http.Client, error) {
-		client, err := originalCreateClient(provider)
-		if err != nil {
-			return nil, err
-		}
-		transport := client.Transport.(*http.Transport)
-		certpool := x509.NewCertPool()
-		certpool.AddCert(failingServer1.Certificate())
-		certpool.AddCert(failingServer2.Certificate())
-		transport.TLSClientConfig.RootCAs = certpool
-		// Shorten timeout to make test run faster
-		client.Timeout = 200 * time.Millisecond
-		return client, nil
-	}
-
+	// We can't easily modify the client timeout with the new setup,
+	// so we remove the monkey-patch that did that. The test will run a bit slower.
 	_, _, err = resolver.Resolve(context.Background(), "example.com")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to resolve domain example.com using any DoH provider")
@@ -175,21 +158,8 @@ func TestDoHResolver_Resolve(t *testing.T) {
 				URL:        server.URL + "/dns-query",
 				ServerName: "example.com",
 				Bootstrap:  []string{server.Listener.Addr().String()},
+				RootCA:     certToPEM(server.Certificate()),
 			},
-		}
-
-		originalCreateClient := createClientForProvider
-		defer func() { createClientForProvider = originalCreateClient }()
-		createClientForProvider = func(provider config.DoHProvider) (*http.Client, error) {
-			client, err := originalCreateClient(provider)
-			if err != nil {
-				return nil, err
-			}
-			transport := client.Transport.(*http.Transport)
-			certpool := x509.NewCertPool()
-			certpool.AddCert(server.Certificate())
-			transport.TLSClientConfig.RootCAs = certpool
-			return client, nil
 		}
 
 		_, ip, err := resolver.Resolve(context.Background(), "example.com")
@@ -221,21 +191,8 @@ func TestDoHResolver_Resolve(t *testing.T) {
 				URL:        server.URL,
 				ServerName: "example.com",
 				Bootstrap:  []string{server.Listener.Addr().String()},
+				RootCA:     certToPEM(server.Certificate()),
 			},
-		}
-
-		originalCreateClient := createClientForProvider
-		defer func() { createClientForProvider = originalCreateClient }()
-		createClientForProvider = func(provider config.DoHProvider) (*http.Client, error) {
-			client, err := originalCreateClient(provider)
-			if err != nil {
-				return nil, err
-			}
-			transport := client.Transport.(*http.Transport)
-			certpool := x509.NewCertPool()
-			certpool.AddCert(server.Certificate())
-			transport.TLSClientConfig.RootCAs = certpool
-			return client, nil
 		}
 
 		_, _, err = resolver.Resolve(context.Background(), "example.com")
@@ -258,14 +215,11 @@ func TestCreateClientForProvider_BootstrapFailover(t *testing.T) {
 			"127.0.0.1:12345", // Bad address
 			workingServer.Listener.Addr().String(),
 		},
+		RootCA: certToPEM(workingServer.Certificate()),
 	}
 
 	client, err := createClientForProvider(provider)
 	require.NoError(t, err)
-	transport := client.Transport.(*http.Transport)
-	certpool := x509.NewCertPool()
-	certpool.AddCert(workingServer.Certificate())
-	transport.TLSClientConfig.RootCAs = certpool
 
 	// This request should succeed because the dialer will failover to the working bootstrap server
 	req, err := http.NewRequest("GET", workingServer.URL, nil)
