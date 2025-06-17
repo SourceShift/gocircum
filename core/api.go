@@ -273,20 +273,22 @@ func (e *Engine) createDomainFrontingDialer(fp *config.Fingerprint, dialer engin
 
 // createDialerForStrategy creates a base dialer from a fingerprint.
 func (e *Engine) createDialerForStrategy(fp *config.Fingerprint) (engine.Dialer, error) {
+	// Enforce security policy at runtime. All strategies MUST use domain fronting.
+	if fp.DomainFronting == nil || !fp.DomainFronting.Enabled {
+		return nil, fmt.Errorf("security policy violation: strategy '%s' must have domain_fronting enabled", fp.ID)
+	}
+
+	// 1. Create the base dialer (TCP or QUIC) without domain fronting logic.
 	baseDialer, err := e.dialerFactory.NewDialer(&fp.Transport, &fp.TLS)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create base dialer for strategy %s: %w", fp.ID, err)
+		return nil, fmt.Errorf("failed to create base dialer: %w", err)
 	}
 
-	// Wrap the dialer in a CONNECT tunnel if domain fronting is enabled
-	if fp.DomainFronting != nil && fp.DomainFronting.Enabled {
-		return e.createDomainFrontingDialer(fp, baseDialer), nil
-	}
-
-	return baseDialer, nil
+	// 2. The only allowed path is to wrap the base dialer with the domain fronting dialer.
+	return e.createDomainFrontingDialer(fp, baseDialer), nil
 }
 
-// GetBestStrategy finds the best available strategy by testing and ranking them.
+// GetBestStrategy ranks all strategies and returns the one with the best performance.
 func (e *Engine) GetBestStrategy(ctx context.Context) (*config.Fingerprint, error) {
 	if e.ranker == nil {
 		return nil, fmt.Errorf("cannot get best strategy: engine was initialized without DoH providers")
