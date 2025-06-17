@@ -18,7 +18,12 @@ import (
 )
 
 func TestGetShuffledProviders(t *testing.T) {
-	resolver := NewDoHResolver(nil)
+	providers := []config.DoHProvider{
+		{Name: "1"}, {Name: "2"}, {Name: "3"},
+	}
+	resolver, err := NewDoHResolver(providers)
+	require.NoError(t, err)
+
 	shuffled1 := resolver.getShuffledProviders()
 	shuffled2 := resolver.getShuffledProviders()
 
@@ -30,9 +35,7 @@ func TestGetShuffledProviders(t *testing.T) {
 		}
 	}
 
-	if len(shuffled1) != len(dohProviders) {
-		t.Errorf("Expected shuffled list to have length %d, but got %d", len(dohProviders), len(shuffled1))
-	}
+	require.Equal(t, len(providers), len(shuffled1), "Expected shuffled list to have the same length as the original")
 }
 
 func TestDoHResolver_Resolve_Failover(t *testing.T) {
@@ -50,7 +53,9 @@ func TestDoHResolver_Resolve_Failover(t *testing.T) {
 	}))
 	defer failingServer.Close()
 
-	resolver := NewDoHResolver(nil)
+	dummyProviders := []config.DoHProvider{{Name: "dummy"}}
+	resolver, err := NewDoHResolver(dummyProviders)
+	require.NoError(t, err)
 
 	// Override providers for test
 	resolver.providers = []config.DoHProvider{
@@ -102,7 +107,10 @@ func TestDoHResolver_Resolve_AllFail(t *testing.T) {
 	}))
 	defer failingServer2.Close()
 
-	resolver := NewDoHResolver(nil)
+	dummyProviders := []config.DoHProvider{{Name: "dummy"}}
+	resolver, err := NewDoHResolver(dummyProviders)
+	require.NoError(t, err)
+
 	resolver.providers = []config.DoHProvider{
 		{
 			Name:       "Failing1",
@@ -135,7 +143,7 @@ func TestDoHResolver_Resolve_AllFail(t *testing.T) {
 		return client, nil
 	}
 
-	_, _, err := resolver.Resolve(context.Background(), "example.com")
+	_, _, err = resolver.Resolve(context.Background(), "example.com")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to resolve domain example.com using any DoH provider")
 }
@@ -157,7 +165,10 @@ func TestDoHResolver_Resolve(t *testing.T) {
 		}))
 		defer server.Close()
 
-		resolver := NewDoHResolver(nil)
+		dummyProviders := []config.DoHProvider{{Name: "dummy"}}
+		resolver, err := NewDoHResolver(dummyProviders)
+		require.NoError(t, err)
+
 		resolver.providers = []config.DoHProvider{
 			{
 				Name:       "TestServer",
@@ -200,7 +211,10 @@ func TestDoHResolver_Resolve(t *testing.T) {
 		}))
 		defer server.Close()
 
-		resolver := NewDoHResolver(nil)
+		dummyProviders := []config.DoHProvider{{Name: "dummy"}}
+		resolver, err := NewDoHResolver(dummyProviders)
+		require.NoError(t, err)
+
 		resolver.providers = []config.DoHProvider{
 			{
 				Name:       "TestServer",
@@ -224,7 +238,7 @@ func TestDoHResolver_Resolve(t *testing.T) {
 			return client, nil
 		}
 
-		_, _, err := resolver.Resolve(context.Background(), "example.com")
+		_, _, err = resolver.Resolve(context.Background(), "example.com")
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "no A records found for example.com from TestServer")
 	})

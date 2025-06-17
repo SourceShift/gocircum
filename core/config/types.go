@@ -20,6 +20,12 @@ func (c *FileConfig) Validate() error {
 	if len(c.Fingerprints) == 0 {
 		return fmt.Errorf("no fingerprints defined in configuration")
 	}
+	if len(c.DoHProviders) == 0 {
+		return fmt.Errorf("security policy violation: at least one DoH provider must be configured to prevent DNS-based blocking")
+	}
+	if len(c.CanaryDomains) == 0 {
+		return fmt.Errorf("at least one canary_domain must be configured for strategy testing")
+	}
 	// Here you can add more validation logic for each fingerprint
 	for _, fp := range c.Fingerprints {
 		if err := fp.Validate(); err != nil {

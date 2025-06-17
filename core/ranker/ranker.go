@@ -43,17 +43,21 @@ type Ranker struct {
 }
 
 // NewRanker creates a new Ranker instance.
-func NewRanker(logger logging.Logger, dohProviders []config.DoHProvider) *Ranker {
+func NewRanker(logger logging.Logger, dohProviders []config.DoHProvider) (*Ranker, error) {
 	if logger == nil {
 		logger = logging.GetLogger()
+	}
+	dohResolver, err := proxy.NewDoHResolver(dohProviders)
+	if err != nil {
+		return nil, fmt.Errorf("failed to initialize DoH resolver for ranker: %w", err)
 	}
 	return &Ranker{
 		ActiveProbes:  list.New(),
 		Logger:        logger,
 		Cache:         make(map[string]*CacheEntry),
 		DialerFactory: &engine.DefaultDialerFactory{},
-		DoHResolver:   proxy.NewDoHResolver(dohProviders),
-	}
+		DoHResolver:   dohResolver,
+	}, nil
 }
 
 // TestAndRank sorts fingerprints by success and latency.

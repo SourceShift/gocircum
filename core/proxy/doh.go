@@ -18,27 +18,9 @@ import (
 )
 
 var (
-	// A list of trusted DoH providers.
-	dohProviders = []config.DoHProvider{
-		{
-			Name:       "Cloudflare",
-			URL:        "https://dns.cloudflare.com/dns-query",
-			ServerName: "dns.cloudflare.com",
-			Bootstrap:  []string{"1.1.1.1:443", "1.0.0.1:443"},
-		},
-		{
-			Name:       "Google",
-			URL:        "https://dns.google/resolve",
-			ServerName: "dns.google",
-			Bootstrap:  []string{"8.8.8.8:443", "8.8.4.4:443"},
-		},
-		{
-			Name:       "Quad9",
-			URL:        "https://dns.quad9.net/dns-query",
-			ServerName: "dns.quad9.net",
-			Bootstrap:  []string{"9.9.9.9:443", "149.112.112.112:443"},
-		},
-	}
+	// The hardcoded list of DoH providers has been removed to eliminate
+	// a centralized, blockable choke point. All DoH providers MUST now
+	// be specified in the configuration file.
 	mu sync.Mutex
 )
 
@@ -47,15 +29,16 @@ type DoHResolver struct {
 	providers []config.DoHProvider
 }
 
-// NewDoHResolver creates a secure resolver that uses a set of trusted DoH providers.
-func NewDoHResolver(providers []config.DoHProvider) *DoHResolver {
+// NewDoHResolver creates a secure resolver that uses a set of user-provided DoH providers.
+// It is a security risk to fall back to a hardcoded list, so providers are mandatory.
+func NewDoHResolver(providers []config.DoHProvider) (*DoHResolver, error) {
 	if len(providers) == 0 {
-		// Fallback to the default list if none are provided.
-		return &DoHResolver{providers: dohProviders}
+		// Fail-safe: Do not proceed without explicit DoH provider configuration.
+		return nil, fmt.Errorf("security policy violation: at least one DoH provider must be configured")
 	}
 	return &DoHResolver{
 		providers: providers,
-	}
+	}, nil
 }
 
 // getShuffledProviders returns a shuffled copy of the DoH providers.
@@ -171,6 +154,9 @@ func (r *DoHResolver) Resolve(ctx context.Context, name string) (context.Context
 			continue
 		}
 		req.Header.Set("Accept", "application/dns-json")
+		if provider.ServerName != "" {
+			req.Host = provider.ServerName
+		}
 
 		resp, err := client.Do(req)
 		if err != nil {

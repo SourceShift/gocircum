@@ -28,14 +28,18 @@ type Engine struct {
 
 // NewEngine creates a new core engine with a given set of fingerprints.
 func NewEngine(cfg *config.FileConfig, logger logging.Logger) (*Engine, error) {
-	if len(cfg.Fingerprints) == 0 {
-		return nil, fmt.Errorf("engine must be initialized with at least one fingerprint")
+	if err := cfg.Validate(); err != nil {
+		return nil, fmt.Errorf("invalid configuration: %w", err)
 	}
 	if logger == nil {
 		logger = logging.GetLogger()
 	}
+	ranker, err := ranker.NewRanker(logger, cfg.DoHProviders)
+	if err != nil {
+		return nil, fmt.Errorf("failed to initialize engine: %w", err)
+	}
 	return &Engine{
-		ranker:         ranker.NewRanker(logger, cfg.DoHProviders),
+		ranker:         ranker,
 		config:         cfg,
 		proxyErrorChan: make(chan error, 1),
 		logger:         logger.With("component", "engine"),
@@ -135,7 +139,12 @@ func (e *Engine) StartProxyWithStrategy(ctx context.Context, addr string, strate
 		return "", fmt.Errorf("could not create dialer for strategy %s: %w", strategy.ID, err)
 	}
 
-	p, err := proxy.New(addr, dialer, e.config.DoHProviders)
+	dohResolver, err := proxy.NewDoHResolver(e.config.DoHProviders)
+	if err != nil {
+		return "", fmt.Errorf("failed to create DoH resolver for proxy: %w", err)
+	}
+
+	p, err := proxy.New(addr, dialer, dohResolver)
 	if err != nil {
 		return "", fmt.Errorf("failed to create socks5 server: %w", err)
 	}

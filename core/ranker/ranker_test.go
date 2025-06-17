@@ -66,7 +66,13 @@ func TestRanker_TestAndRank(t *testing.T) {
 	defer ctrl.Finish()
 
 	logger := testutils.NewTestLogger()
-	ranker := NewRanker(logger, nil)
+	// Provide a dummy provider to satisfy the NewRanker validation,
+	// as we are injecting a mock resolver for this test anyway.
+	dummyProviders := []config.DoHProvider{{Name: "dummy", URL: "dummy"}}
+	ranker, err := NewRanker(logger, dummyProviders)
+	if err != nil {
+		t.Fatalf("NewRanker failed unexpectedly: %v", err)
+	}
 	ranker.DialerFactory = &mockDialerFactory{t: t, ctrl: ctrl} // Inject the mock factory
 	ranker.DoHResolver = &mockResolver{}                        // Inject the mock resolver
 

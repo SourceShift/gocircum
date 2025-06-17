@@ -62,7 +62,12 @@ func TestEngine_ProxyLifecycle(t *testing.T) {
 		Transport: config.Transport{Protocol: "tcp"},
 		TLS:       config.TLS{Library: "go-stdlib"},
 	}
-	engine, err := NewEngine(&config.FileConfig{Fingerprints: []config.Fingerprint{fp}}, logger)
+	fileConfig := &config.FileConfig{
+		Fingerprints:  []config.Fingerprint{fp},
+		DoHProviders:  []config.DoHProvider{{Name: "dummy", URL: "dummy"}},
+		CanaryDomains: []string{"example.com"},
+	}
+	engine, err := NewEngine(fileConfig, logger)
 	assert.NoError(t, err, "NewEngine should not return an error")
 
 	// 1. Start the proxy and check status
@@ -100,7 +105,12 @@ func TestEngine_ProxyFailure(t *testing.T) {
 		Transport: config.Transport{Protocol: "tcp"},
 		TLS:       config.TLS{Library: "go-stdlib"},
 	}
-	engine, err := NewEngine(&config.FileConfig{Fingerprints: []config.Fingerprint{fp}}, logger)
+	fileConfig := &config.FileConfig{
+		Fingerprints:  []config.Fingerprint{fp},
+		DoHProviders:  []config.DoHProvider{{Name: "dummy", URL: "dummy"}},
+		CanaryDomains: []string{"example.com"},
+	}
+	engine, err := NewEngine(fileConfig, logger)
 	require.NoError(t, err, "NewEngine should not return an error")
 
 	// Start the proxy
@@ -189,8 +199,13 @@ func TestEngine_DomainFronting(t *testing.T) {
 	}
 	// We don't use the engine here, but we keep it for consistency with other tests.
 	// logger := logging.GetLogger()
-	// _, err = NewEngine(&config.FileConfig{Fingerprints: []config.Fingerprint{fp}}, logger)
-	// require.NoError(t, err, "NewEngine should not return an error")
+	fileConfig := &config.FileConfig{
+		Fingerprints:  []config.Fingerprint{fp},
+		DoHProviders:  []config.DoHProvider{{Name: "dummy", URL: "dummy"}},
+		CanaryDomains: []string{"example.com"},
+	}
+	_, err = NewEngine(fileConfig, logging.GetLogger())
+	require.NoError(t, err, "NewEngine should not return an error")
 
 	// 3. Get the dialer and try to connect
 	// We need to create a custom dialer that uses the test server's cert pool.

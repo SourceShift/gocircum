@@ -5,8 +5,6 @@ import (
 	"fmt"
 	"net"
 
-	"gocircum/core/config"
-
 	"github.com/armon/go-socks5"
 )
 
@@ -22,11 +20,11 @@ type Proxy struct {
 
 // New creates and configures a new SOCKS5 proxy.
 // It takes a listening address, a custom dialer function, and a slice of DoH providers.
-func New(addr string, dialer CustomDialer, dohProviders []config.DoHProvider) (*Proxy, error) {
+func New(addr string, dialer CustomDialer, resolver *DoHResolver) (*Proxy, error) {
 	conf := &socks5.Config{
 		// The custom dialer is the key to integrating our transport logic.
 		Dial:     dialer,
-		Resolver: NewDoHResolver(dohProviders),
+		Resolver: resolver,
 	}
 
 	server, err := socks5.New(conf)
