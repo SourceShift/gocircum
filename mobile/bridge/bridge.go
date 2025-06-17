@@ -91,7 +91,7 @@ func (b *Bridge) start(configJSON string, updater StatusUpdater) error {
 	}
 
 	var err error
-	engine, err := gocircum.NewEngine(cfg.Fingerprints, logger)
+	engine, err := gocircum.NewEngine(&cfg, logger)
 	if err != nil {
 		return fmt.Errorf("failed to create engine: %w", err)
 	}
