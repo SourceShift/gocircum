@@ -1,3 +1,10 @@
+canary_domains:
+  - "www.cloudflare.com:443"
+  - "www.google.com:443"
+  - "www.amazon.com:443"
+  - "www.microsoft.com:443"
+  - "www.apple.com:443"
+
 fingerprints:
   - id: "default_tcp_stdlib"
     description: "Default TCP with stdlib TLS 1.3"

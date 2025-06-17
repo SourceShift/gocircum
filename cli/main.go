@@ -65,13 +65,13 @@ func main() {
 func runProxy(addr, strategyID, configFile string) {
 	logger := logging.GetLogger().With("component", "proxy-runner")
 
-	fingerprints, err := config.LoadFingerprintsFromFile(configFile)
+	cfg, err := config.LoadFileConfig(configFile)
 	if err != nil {
 		logger.Error("Failed to load config", "error", err)
 		os.Exit(1)
 	}
 
-	engine, err := core.NewEngine(fingerprints, logger)
+	engine, err := core.NewEngine(cfg, logger)
 	if err != nil {
 		logger.Error("Failed to create engine", "error", err)
 		os.Exit(1)
@@ -114,13 +114,13 @@ func runProxy(addr, strategyID, configFile string) {
 
 func runTest(configFile string) {
 	logger := logging.GetLogger().With("component", "test-runner")
-	fingerprints, err := config.LoadFingerprintsFromFile(configFile)
+	cfg, err := config.LoadFileConfig(configFile)
 	if err != nil {
 		logger.Error("Failed to load config", "error", err)
 		os.Exit(1)
 	}
 
-	engine, err := core.NewEngine(fingerprints, logger)
+	engine, err := core.NewEngine(cfg, logger)
 	if err != nil {
 		logger.Error("Failed to create engine", "error", err)
 		os.Exit(1)

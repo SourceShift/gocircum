@@ -18,8 +18,8 @@ type Engine struct {
 }
 
 // NewEngine creates a new instance of the circumvention engine from a set of fingerprints.
-func NewEngine(fingerprints []config.Fingerprint, logger logging.Logger) (interfaces.Engine, error) {
-	coreEngine, err := core.NewEngine(fingerprints, logger)
+func NewEngine(cfg *config.FileConfig, logger logging.Logger) (interfaces.Engine, error) {
+	coreEngine, err := core.NewEngine(cfg, logger)
 	if err != nil {
 		return nil, err
 	}
@@ -47,7 +47,7 @@ func (e *Engine) Stop() error {
 
 // Status returns the current operational status of the engine.
 func (e *Engine) Status() (string, error) {
-	return e.coreEngine.Status(), nil
+	return e.coreEngine.Status()
 }
 
 // TestStrategies tests all available fingerprints and returns the ranked results.

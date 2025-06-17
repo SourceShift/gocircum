@@ -1,3 +1,6 @@
+canary_domains:
+  - "www.example.com:443"
+
 fingerprints:
   - id: "test_tcp_stdlib"
     description: "Test TCP with stdlib TLS 1.3"

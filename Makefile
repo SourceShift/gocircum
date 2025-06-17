@@ -70,8 +70,12 @@ ios:
 # Testing and linting
 .PHONY: test
 test:
-	@echo "Running tests..."
-	$(GOTEST) -v ./...
+	@echo "Running tests for standard packages..."
+	$(eval PKGS_TO_TEST := $(shell go list ./... | grep -v /mobile))
+	@echo "Running tests on packages: $(PKGS_TO_TEST)"
+	$(GOTEST) -timeout 30s -v $(PKGS_TO_TEST)
+	@echo "Running mobile bridge tests specifically..."
+	$(GOTEST) -timeout 10s -v ./mobile/bridge
 
 .PHONY: lint
 lint:
