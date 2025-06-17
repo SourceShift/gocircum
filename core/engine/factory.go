@@ -141,7 +141,7 @@ func (c *fragmentingConn) writeStatic(b []byte) (n int, err error) {
 		minSize, maxSize := sizeRange[0], sizeRange[1]
 		chunkSize := minSize
 		if maxSize > minSize {
-			secureRand, err := cryptoRandInt(minSize, maxSize)
+			secureRand, err := CryptoRandInt(minSize, maxSize)
 			if err != nil {
 				c.logError(err, "failed to generate secure random number for chunk size")
 				return totalSent, err
@@ -165,7 +165,7 @@ func (c *fragmentingConn) writeStatic(b []byte) (n int, err error) {
 			minDelay, maxDelay := c.cfg.DelayMs[0], c.cfg.DelayMs[1]
 			delayMs := minDelay
 			if maxDelay > minDelay {
-				secureRand, err := cryptoRandInt(minDelay, maxDelay)
+				secureRand, err := CryptoRandInt(minDelay, maxDelay)
 				if err != nil {
 					c.logError(err, "failed to generate secure random number for delay")
 					return totalSent, err
@@ -214,7 +214,7 @@ func (c *fragmentingConn) writeEven(b []byte) (n int, err error) {
 
 		// To make it slightly less predictable, we can add a small random variation to chunk size
 		if len(b) > currentChunkSize { // Don't randomize the last chunk
-			variation, _ := cryptoRandInt(0, chunkSize/5)
+			variation, _ := CryptoRandInt(0, chunkSize/5)
 			currentChunkSize += (variation - chunkSize/10)
 			if currentChunkSize <= 0 {
 				currentChunkSize = 1
@@ -232,7 +232,7 @@ func (c *fragmentingConn) writeEven(b []byte) (n int, err error) {
 			minDelay, maxDelay := c.cfg.DelayMs[0], c.cfg.DelayMs[1]
 			delayMs := minDelay
 			if maxDelay > minDelay {
-				secureRand, err := cryptoRandInt(minDelay, maxDelay)
+				secureRand, err := CryptoRandInt(minDelay, maxDelay)
 				if err != nil {
 					c.logError(err, "failed to generate secure random number for delay")
 					return totalSent, err

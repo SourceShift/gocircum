@@ -8,7 +8,6 @@ import (
 	"gocircum/core/engine"
 	"gocircum/core/proxy"
 	"gocircum/pkg/logging"
-	"math/rand"
 	"net"
 	"sort"
 	"sync"
@@ -125,7 +124,12 @@ func (r *Ranker) testStrategy(ctx context.Context, fingerprint *config.Fingerpri
 	if len(canaryDomains) == 0 {
 		return false, 0, fmt.Errorf("no canary domains provided")
 	}
-	domainToResolve := canaryDomains[rand.Intn(len(canaryDomains))]
+
+	domainIndex, err := engine.CryptoRandInt(0, len(canaryDomains)-1)
+	if err != nil {
+		return false, 0, fmt.Errorf("failed to select random canary domain: %w", err)
+	}
+	domainToResolve := canaryDomains[domainIndex]
 
 	// Use the DoHResolver to resolve the canary domain securely.
 	// This prevents system DNS leakage.
@@ -143,8 +147,14 @@ func (r *Ranker) testStrategy(ctx context.Context, fingerprint *config.Fingerpri
 		return false, 0, err
 	}
 
-	// Add random jitter to break timing patterns
-	time.Sleep(time.Duration(50+rand.Intn(200)) * time.Millisecond)
+	// Add cryptographically secure random jitter to break timing patterns
+	jitterMs, err := engine.CryptoRandInt(50, 250)
+	if err != nil {
+		r.Logger.Error("failed to generate secure jitter", "error", err)
+		// Fallback to a static jitter, but this should not happen.
+		jitterMs = 100
+	}
+	time.Sleep(time.Duration(jitterMs) * time.Millisecond)
 
 	start := time.Now()
 	conn, err := dialer(ctx, "tcp", addressToDial)

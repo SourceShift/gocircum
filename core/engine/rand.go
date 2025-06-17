@@ -6,9 +6,9 @@ import (
 	"math/big"
 )
 
-// cryptoRandInt generates a cryptographically secure random integer in the range [min, max].
+// CryptoRandInt generates a cryptographically secure random integer in the range [min, max].
 // It uses crypto/rand for security.
-func cryptoRandInt(min, max int) (int, error) {
+func CryptoRandInt(min, max int) (int, error) {
 	if min < 0 || max < 0 {
 		return 0, fmt.Errorf("crypto/rand does not support negative numbers")
 	}
