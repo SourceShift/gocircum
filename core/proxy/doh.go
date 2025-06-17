@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"gocircum/core/config"
+	"gocircum/core/engine"
 	"gocircum/pkg/logging"
 	"math/big"
 	"net"
@@ -99,6 +100,16 @@ var createClientForProvider = func(provider config.DoHProvider) (*http.Client, e
 
 			var lastErr error
 			for _, bootstrapAddr := range shuffledBootstrap {
+				// Add cryptographically secure random jitter to break timing patterns
+				jitterMs, err := engine.CryptoRandInt(50, 250)
+				if err != nil {
+					// Log the error but don't fail the entire DoH resolution.
+					// A static delay is better than no delay.
+					logging.GetLogger().Error("failed to generate secure jitter for DoH bootstrap", "error", err)
+					jitterMs = 100
+				}
+				time.Sleep(time.Duration(jitterMs) * time.Millisecond)
+
 				conn, err := dialer.DialContext(ctx, "tcp", bootstrapAddr)
 				if err == nil {
 					return conn, nil
