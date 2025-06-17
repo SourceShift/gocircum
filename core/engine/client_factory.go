@@ -2,6 +2,7 @@ package engine
 
 import (
 	"crypto/tls"
+	"crypto/x509"
 	"fmt"
 	"gocircum/core/config"
 	"gocircum/core/constants"
@@ -12,19 +13,14 @@ import (
 )
 
 // NewTLSClient wraps an existing network connection with a TLS layer,
-// based on the provided TLS configuration.
-func NewTLSClient(conn net.Conn, cfg *config.TLS) (net.Conn, error) {
-	host, _, err := net.SplitHostPort(conn.RemoteAddr().String())
-	if err != nil {
-		logging.GetLogger().Warn("could not split host/port, falling back to using address as host", "address", conn.RemoteAddr().String(), "error", err)
-		host = conn.RemoteAddr().String()
-	}
-
+// based on the provided TLS configuration. An optional sni can be provided
+// to override the server name for the TLS handshake.
+func NewTLSClient(conn net.Conn, cfg *config.TLS, serverName string, rootCAs *x509.CertPool) (net.Conn, error) {
 	switch cfg.Library {
 	case "go-stdlib", "stdlib":
-		return newStandardTLSClient(conn, host, cfg)
+		return newStandardTLSClient(conn, serverName, cfg, rootCAs)
 	case "utls":
-		return newUTLSClient(conn, host, cfg)
+		return newUTLSClient(conn, serverName, cfg, rootCAs)
 	case "uquic":
 		// For QUIC, the TLS config is part of the transport.
 		// This case is handled by the transport layer itself.
@@ -35,8 +31,8 @@ func NewTLSClient(conn net.Conn, cfg *config.TLS) (net.Conn, error) {
 	}
 }
 
-func newStandardTLSClient(conn net.Conn, host string, cfg *config.TLS) (net.Conn, error) {
-	tlsConfig, err := buildStandardTLSConfig(host, cfg)
+func newStandardTLSClient(conn net.Conn, serverName string, cfg *config.TLS, rootCAs *x509.CertPool) (net.Conn, error) {
+	tlsConfig, err := buildStandardTLSConfig(serverName, cfg, rootCAs)
 	if err != nil {
 		return nil, fmt.Errorf("failed to build standard TLS config: %w", err)
 	}
@@ -49,8 +45,8 @@ func newStandardTLSClient(conn net.Conn, host string, cfg *config.TLS) (net.Conn
 	return tlsConn, nil
 }
 
-func newUTLSClient(conn net.Conn, host string, cfg *config.TLS) (net.Conn, error) {
-	utlsConfig, err := buildUTLSConfig(host, cfg)
+func newUTLSClient(conn net.Conn, serverName string, cfg *config.TLS, rootCAs *x509.CertPool) (net.Conn, error) {
+	utlsConfig, err := buildUTLSConfig(serverName, cfg, rootCAs)
 	if err != nil {
 		return nil, fmt.Errorf("failed to build uTLS config: %w", err)
 	}
@@ -68,7 +64,14 @@ func newUTLSClient(conn net.Conn, host string, cfg *config.TLS) (net.Conn, error
 	return uconn, nil
 }
 
-func buildStandardTLSConfig(host string, cfg *config.TLS) (*tls.Config, error) {
+func buildStandardTLSConfig(serverName string, cfg *config.TLS, rootCAs *x509.CertPool) (*tls.Config, error) {
+	if cfg.SkipVerify != nil && *cfg.SkipVerify {
+		logging.GetLogger().Error("SECURITY WARNING: 'skip_verify: true' is configured, but this option is deprecated and IGNORED. TLS certificate validation is enforced.",
+			"risk", "Man-in-the-Middle (MITM) attacks",
+			"advice", "Remove 'skip_verify: true' from your configuration. This option is for testing only.",
+		)
+	}
+
 	minVersion, ok := constants.TLSVersionMap[cfg.MinVersion]
 	if !ok {
 		return nil, fmt.Errorf("unknown min TLS version: %s", cfg.MinVersion)
@@ -79,14 +82,22 @@ func buildStandardTLSConfig(host string, cfg *config.TLS) (*tls.Config, error) {
 	}
 
 	return &tls.Config{
-		ServerName:         host,
-		InsecureSkipVerify: cfg.SkipVerify,
+		ServerName:         serverName,
+		InsecureSkipVerify: false,
+		RootCAs:            rootCAs,
 		MinVersion:         minVersion,
 		MaxVersion:         maxVersion,
 	}, nil
 }
 
-func buildUTLSConfig(host string, cfg *config.TLS) (*utls.Config, error) {
+func buildUTLSConfig(serverName string, cfg *config.TLS, rootCAs *x509.CertPool) (*utls.Config, error) {
+	if cfg.SkipVerify != nil && *cfg.SkipVerify {
+		logging.GetLogger().Error("SECURITY WARNING: 'skip_verify: true' is configured, but this option is deprecated and IGNORED. TLS certificate validation is enforced.",
+			"risk", "Man-in-the-Middle (MITM) attacks",
+			"advice", "Remove 'skip_verify: true' from your configuration. This option is for testing only.",
+		)
+	}
+
 	minVersion, ok := constants.TLSVersionMap[cfg.MinVersion]
 	if !ok {
 		return nil, fmt.Errorf("unknown min TLS version: %s", cfg.MinVersion)
@@ -97,8 +108,9 @@ func buildUTLSConfig(host string, cfg *config.TLS) (*utls.Config, error) {
 	}
 
 	return &utls.Config{
-		ServerName:         host,
-		InsecureSkipVerify: cfg.SkipVerify,
+		ServerName:         serverName,
+		InsecureSkipVerify: false,
+		RootCAs:            rootCAs,
 		MinVersion:         minVersion,
 		MaxVersion:         maxVersion,
 	}, nil

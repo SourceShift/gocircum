@@ -6,7 +6,7 @@ import (
 	"gocircum/core/config"
 	"gocircum/core/constants"
 	"gocircum/core/transport"
-	"math/rand"
+	"gocircum/pkg/logging"
 	"net"
 	"time"
 
@@ -63,6 +63,13 @@ func (f *DefaultDialerFactory) NewDialer(transportCfg *config.Transport, tlsCfg 
 }
 
 func buildQUICUTLSConfig(cfg *config.TLS) (*utls.Config, error) {
+	if cfg.SkipVerify != nil && *cfg.SkipVerify {
+		logging.GetLogger().Error("SECURITY WARNING: 'skip_verify: true' is configured for a QUIC strategy, but this option is deprecated and IGNORED. TLS certificate validation is enforced.",
+			"risk", "Man-in-the-Middle (MITM) attacks",
+			"advice", "Remove 'skip_verify: true' from your configuration. This option is for testing only.",
+		)
+	}
+
 	minVersion, ok := constants.TLSVersionMap[cfg.MinVersion]
 	if !ok {
 		return nil, fmt.Errorf("unknown min TLS version: %s", cfg.MinVersion)
@@ -73,7 +80,7 @@ func buildQUICUTLSConfig(cfg *config.TLS) (*utls.Config, error) {
 	}
 
 	return &utls.Config{
-		InsecureSkipVerify: cfg.SkipVerify,
+		InsecureSkipVerify: false,
 		MinVersion:         minVersion,
 		MaxVersion:         maxVersion,
 	}, nil
@@ -128,8 +135,14 @@ func (c *fragmentingConn) Write(b []byte) (n int, err error) {
 		minSize, maxSize := sizeRange[0], sizeRange[1]
 		chunkSize := minSize
 		if maxSize > minSize {
-			chunkSize += rand.Intn(maxSize - minSize + 1)
+			secureRand, err := cryptoRandInt(minSize, maxSize)
+			if err != nil {
+				c.logError(err, "failed to generate secure random number for chunk size")
+				return totalSent, err
+			}
+			chunkSize = secureRand
 		}
+
 		if chunkSize > len(b) {
 			chunkSize = len(b)
 		}
@@ -144,11 +157,16 @@ func (c *fragmentingConn) Write(b []byte) (n int, err error) {
 		// Apply delay if there's more data to send
 		if len(b) > 0 && i < len(c.cfg.PacketSizes)-1 {
 			minDelay, maxDelay := c.cfg.DelayMs[0], c.cfg.DelayMs[1]
-			delay := time.Duration(minDelay) * time.Millisecond
+			delayMs := minDelay
 			if maxDelay > minDelay {
-				delay += time.Duration(rand.Intn(maxDelay-minDelay+1)) * time.Millisecond
+				secureRand, err := cryptoRandInt(minDelay, maxDelay)
+				if err != nil {
+					c.logError(err, "failed to generate secure random number for delay")
+					return totalSent, err
+				}
+				delayMs = secureRand
 			}
-			time.Sleep(delay)
+			time.Sleep(time.Duration(delayMs) * time.Millisecond)
 		}
 	}
 
@@ -162,4 +180,11 @@ func (c *fragmentingConn) Write(b []byte) (n int, err error) {
 	}
 
 	return totalSent, nil
+}
+
+func (c *fragmentingConn) logError(err error, msg string) {
+	// A basic logger that prints to stderr.
+	// In a real application, this would use the configured logger.
+	// For now, we avoid adding a logger field to fragmentingConn to minimize changes.
+	logging.GetLogger().Error(msg, "error", err)
 }
