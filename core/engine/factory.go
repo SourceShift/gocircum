@@ -11,8 +11,6 @@ import (
 	"net"
 	"time"
 
-	"crypto/tls"
-
 	utls "github.com/refraction-networking/utls"
 )
 
@@ -45,14 +43,9 @@ func (f *DefaultDialerFactory) NewDialer(transportCfg *config.Transport, tlsCfg 
 
 	switch transportCfg.Protocol {
 	case "tcp":
-		stdLibTlsConfig, err := buildStdLibTLSConfig(tlsCfg, nil)
-		if err != nil {
-			return nil, fmt.Errorf("failed to build stdlib tls config: %w", err)
-		}
-
-		baseDialer, err = transport.NewTCPTransport(&transport.TCPConfig{
-			TLSConfig: stdLibTlsConfig,
-		})
+		var err error
+		// The TCP transport no longer handles TLS. We just create a basic TCP config.
+		baseDialer, err = transport.NewTCPTransport(&transport.TCPConfig{})
 		if err != nil {
 			return nil, fmt.Errorf("failed to create TCP transport: %w", err)
 		}
@@ -108,17 +101,6 @@ func (f *DefaultDialerFactory) NewDialer(transportCfg *config.Transport, tlsCfg 
 	}
 
 	return rawDialer, nil
-}
-
-func buildStdLibTLSConfig(cfg *config.TLS, rootCAs *x509.CertPool) (*tls.Config, error) {
-	if cfg == nil {
-		return nil, nil
-	}
-	return &tls.Config{
-		ServerName:         cfg.ServerName,
-		InsecureSkipVerify: false,
-		RootCAs:            rootCAs,
-	}, nil
 }
 
 func buildQUICUTLSConfig(cfg *config.TLS, rootCAs *x509.CertPool) (*utls.Config, error) {

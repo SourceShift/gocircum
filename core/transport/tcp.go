@@ -2,7 +2,6 @@ package transport
 
 import (
 	"context"
-	"crypto/tls"
 	"fmt"
 	"net"
 	"time"
@@ -13,10 +12,9 @@ type TCPConfig struct {
 	Config
 	DialTimeout time.Duration
 	KeepAlive   time.Duration
-	TLSConfig   *tls.Config
 }
 
-// TCPTransport implements the Transport interface for TCP connections.
+// TCPTransport is a transport that uses TCP.
 type TCPTransport struct {
 	dialer *net.Dialer
 }

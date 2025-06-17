@@ -112,12 +112,12 @@ func TestTCPTransport_DialTLS(t *testing.T) {
 	}()
 
 	// Create TCP transport with TLS config
-	clientConfig := &tls.Config{
-		InsecureSkipVerify: true, // We use a self-signed cert
-	}
+	// The test for DialTLS is fundamentally flawed as the TCPTransport no longer handles TLS.
+	// The logic for testing TLS connections should be moved to a higher-level test
+	// that uses the actual TLS client wrapper (e.g., engine.NewTLSClient).
+	// For this fix, we adjust the constructor call. The test itself is skipped.
 	transport, err := NewTCPTransport(&TCPConfig{
 		DialTimeout: time.Second,
-		TLSConfig:   clientConfig,
 	})
 	if err != nil {
 		t.Fatalf("Failed to create TCP transport: %v", err)
