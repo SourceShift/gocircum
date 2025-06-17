@@ -8,7 +8,11 @@ import (
 	"gocircum/core/proxy"
 	"gocircum/pkg/logging"
 	"gocircum/testserver"
+	"io"
 	"net"
+	"net/http"
+	"net/http/httptest"
+	"os"
 	"sync"
 	"testing"
 	"time"
@@ -16,6 +20,25 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// TestMain manages test execution and cleanup to prevent goroutine leaks
+func TestMain(m *testing.M) {
+	// Run the tests
+	code := m.Run()
+
+	// Force cleanup of any lingering goroutines or resources
+	// The http.DefaultClient can sometimes keep idle connections that prevent clean exit
+	http.DefaultClient.CloseIdleConnections()
+
+	// Clean up any other transport defaults that might keep connections open
+	http.DefaultTransport.(*http.Transport).CloseIdleConnections()
+
+	// Give any lingering goroutines a chance to clean up
+	time.Sleep(100 * time.Millisecond)
+
+	// Exit with the test status code
+	os.Exit(code)
+}
 
 func TestEngine_Status(t *testing.T) {
 	logger := logging.GetLogger()
@@ -52,15 +75,20 @@ func TestEngine_Status(t *testing.T) {
 func TestEngine_ProxyLifecycle(t *testing.T) {
 	logger := logging.GetLogger()
 	fp := config.Fingerprint{
-		ID:          "test-tcp",
-		Description: "Test TCP",
+		ID:          "test-tcp-secure",
+		Description: "Test TCP Secure",
 		DomainFronting: &config.DomainFronting{
 			Enabled:      true,
 			FrontDomain:  "example.com",
 			CovertTarget: "covert.example.com",
 		},
 		Transport: config.Transport{Protocol: "tcp"},
-		TLS:       config.TLS{Library: "go-stdlib"},
+		TLS: config.TLS{
+			Library:       "utls",
+			ClientHelloID: "HelloChrome_Auto",
+			MinVersion:    "1.3",
+			MaxVersion:    "1.3",
+		},
 	}
 	fileConfig := &config.FileConfig{
 		Fingerprints:  []config.Fingerprint{fp},
@@ -90,6 +118,13 @@ func TestEngine_ProxyLifecycle(t *testing.T) {
 	status, err := engine.Status()
 	require.NoError(t, err)
 	assert.Equal(t, "Proxy stopped", status, "Status should be 'Proxy stopped' after stopping")
+
+	// Ensure we clean up any resources at the end of the test
+	t.Cleanup(func() {
+		if engine.activeProxy != nil {
+			_ = engine.Stop()
+		}
+	})
 }
 
 func TestEngine_ProxyFailure(t *testing.T) {
@@ -103,7 +138,12 @@ func TestEngine_ProxyFailure(t *testing.T) {
 			CovertTarget: "covert.example.com",
 		},
 		Transport: config.Transport{Protocol: "tcp"},
-		TLS:       config.TLS{Library: "go-stdlib"},
+		TLS: config.TLS{
+			Library:       "utls",
+			ClientHelloID: "HelloChrome_Auto",
+			MinVersion:    "1.3",
+			MaxVersion:    "1.3",
+		},
 	}
 	fileConfig := &config.FileConfig{
 		Fingerprints:  []config.Fingerprint{fp},
@@ -112,6 +152,13 @@ func TestEngine_ProxyFailure(t *testing.T) {
 	}
 	engine, err := NewEngine(fileConfig, logger)
 	require.NoError(t, err, "NewEngine should not return an error")
+
+	// Ensure we clean up any resources at the end of the test
+	t.Cleanup(func() {
+		if engine.activeProxy != nil {
+			_ = engine.Stop()
+		}
+	})
 
 	// Start the proxy
 	addr := "127.0.0.1:0"
@@ -122,10 +169,10 @@ func TestEngine_ProxyFailure(t *testing.T) {
 	var listener net.Listener
 	require.Eventually(t, func() bool {
 		engine.mu.Lock()
+		defer engine.mu.Unlock()
 		if engine.activeProxy != nil {
 			listener = engine.activeProxy.GetListener()
 		}
-		engine.mu.Unlock()
 		return listener != nil
 	}, time.Second, 10*time.Millisecond, "Proxy listener should become available")
 
@@ -139,11 +186,34 @@ func TestEngine_ProxyFailure(t *testing.T) {
 	err = listener.Close()
 	require.NoError(t, err, "Closing the listener should not cause an error")
 
-	// Wait for the status to reflect the failure.
-	assert.Eventually(t, func() bool {
-		status, err := engine.Status()
-		return err != nil && status == "Proxy failed"
-	}, 2*time.Second, 10*time.Millisecond, "Status should eventually be 'Proxy failed' with an error")
+	// Wait for the status to reflect the failure with a timeout
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	done := make(chan bool)
+	go func() {
+		// Check for the failure state
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+				status, err := engine.Status()
+				if err != nil && status == "Proxy failed" {
+					done <- true
+					return
+				}
+				time.Sleep(10 * time.Millisecond)
+			}
+		}
+	}()
+
+	select {
+	case <-done:
+		// Success - we detected the failure
+	case <-ctx.Done():
+		t.Fatal("Timed out waiting for proxy failure")
+	}
 
 	// Final check
 	status, err = engine.Status()
@@ -153,6 +223,60 @@ func TestEngine_ProxyFailure(t *testing.T) {
 	engine.mu.Lock()
 	assert.Nil(t, engine.activeProxy, "activeProxy should be nil after failure")
 	engine.mu.Unlock()
+}
+
+func TestEngine_GetBestStrategy(t *testing.T) {
+	// --- Setup mock HTTP server to act as the canary endpoint ---
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		io.WriteString(w, "ok")
+	}))
+	defer server.Close()
+
+	// This fingerprint will be used by the ranker.
+	// It's configured to point to our test server.
+	fp := config.Fingerprint{
+		ID:          "test-strategy-for-ranking",
+		Description: "A valid strategy for the ranking test",
+		DomainFronting: &config.DomainFronting{
+			Enabled:      true,
+			FrontDomain:  server.Listener.Addr().String(),
+			CovertTarget: "real-canary.example.com", // This is what the CONNECT request targets
+		},
+		Transport: config.Transport{Protocol: "tcp"},
+		TLS: config.TLS{
+			Library:            "utls",
+			ClientHelloID:      "HelloChrome_Auto",
+			InsecureSkipVerify: true, // Needed for the httptest.Server's self-signed cert
+		},
+	}
+	fileConfig := &config.FileConfig{
+		Fingerprints:  []config.Fingerprint{fp},
+		DoHProviders:  []config.DoHProvider{{Name: "dummy", URL: "https://1.2.3.4/dns-query"}},
+		CanaryDomains: []string{server.Listener.Addr().String()},
+	}
+
+	engine, err := NewEngine(fileConfig, logging.GetLogger())
+	require.NoError(t, err, "NewEngine should not return an error")
+
+	// Ensure resources are cleaned up after the test
+	t.Cleanup(func() {
+		if engine.activeProxy != nil {
+			_ = engine.Stop()
+		}
+	})
+
+	// --- Execute ---
+	// Add a timeout context to prevent hanging
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	best, err := engine.GetBestStrategy(ctx)
+
+	// --- Verify ---
+	require.NoError(t, err, "GetBestStrategy should succeed")
+	require.NotNil(t, best, "A best strategy should have been found")
+	assert.Equal(t, fp.ID, best.ID, "The best strategy should be our test strategy")
 }
 
 func TestEngine_DomainFronting(t *testing.T) {
@@ -167,18 +291,30 @@ func TestEngine_DomainFronting(t *testing.T) {
 	require.NoError(t, err, "Failed to start TLS listener")
 	defer listener.Close()
 
+	// Create a stop channel to terminate the goroutine
+	stopCh := make(chan struct{})
+	defer close(stopCh)
+
 	go func() {
-		rawConn, err := listener.Accept()
-		if err != nil {
-			return
+		for {
+			select {
+			case <-stopCh:
+				return
+			default:
+				rawConn, err := listener.Accept()
+				if err != nil {
+					return
+				}
+				// The server needs to perform a handshake to avoid the "connection reset by peer" error.
+				tlsConn := tls.Server(rawConn, tlsConfig)
+				if err := tlsConn.Handshake(); err != nil {
+					// t.Logf("Server handshake error: %v", err)
+					tlsConn.Close()
+					continue
+				}
+				tlsConn.Close()
+			}
 		}
-		// The server needs to perform a handshake to avoid the "connection reset by peer" error.
-		tlsConn := tls.Server(rawConn, tlsConfig)
-		if err := tlsConn.Handshake(); err != nil {
-			// t.Logf("Server handshake error: %v", err)
-			return
-		}
-		tlsConn.Close()
 	}()
 
 	// 2. Setup the engine with a domain fronting fingerprint
@@ -192,9 +328,10 @@ func TestEngine_DomainFronting(t *testing.T) {
 		},
 		Transport: config.Transport{Protocol: "tcp"},
 		TLS: config.TLS{
-			Library:    "go-stdlib",
-			MinVersion: "1.2",
-			MaxVersion: "1.3",
+			Library:       "utls",
+			ClientHelloID: "HelloChrome_Auto",
+			MinVersion:    "1.3",
+			MaxVersion:    "1.3",
 		},
 	}
 	// We don't use the engine here, but we keep it for consistency with other tests.
@@ -204,13 +341,25 @@ func TestEngine_DomainFronting(t *testing.T) {
 		DoHProviders:  []config.DoHProvider{{Name: "dummy", URL: "dummy"}},
 		CanaryDomains: []string{"example.com"},
 	}
-	_, err = NewEngine(fileConfig, logging.GetLogger())
+	engine, err := NewEngine(fileConfig, logging.GetLogger())
 	require.NoError(t, err, "NewEngine should not return an error")
+
+	// Ensure resources are cleaned up
+	t.Cleanup(func() {
+		if engine.activeProxy != nil {
+			_ = engine.Stop()
+		}
+	})
 
 	// 3. Get the dialer and try to connect
 	// We need to create a custom dialer that uses the test server's cert pool.
 	// This is a bit of a hack, but it's necessary to test domain fronting
 	// without disabling certificate verification.
+
+	// Add timeout to the dialer context
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
 	customDialer := func(ctx context.Context, network, address string) (net.Conn, error) {
 		// We need to bypass the regular dialer creation and inject our own
 		// that uses the test server's cert pool. This is a bit ugly.
@@ -231,7 +380,7 @@ func TestEngine_DomainFronting(t *testing.T) {
 		return tlsConn, nil
 	}
 
-	clientConn, err := customDialer(context.Background(), "tcp", "dummy.destination.com:443")
+	clientConn, err := customDialer(ctx, "tcp", "dummy.destination.com:443")
 	require.NoError(t, err, "Dialer should connect successfully")
 	clientConn.Close()
 }

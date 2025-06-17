@@ -9,6 +9,8 @@ import (
 	"gocircum/testutils"
 	"log"
 	"net"
+	"net/http"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -17,6 +19,22 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.uber.org/mock/gomock"
 )
+
+// TestMain manages test execution and cleanup to prevent goroutine leaks
+func TestMain(m *testing.M) {
+	// Run the tests
+	code := m.Run()
+
+	// Force cleanup of any lingering goroutines or resources
+	http.DefaultClient.CloseIdleConnections()
+	http.DefaultTransport.(*http.Transport).CloseIdleConnections()
+
+	// Give any lingering goroutines a chance to clean up
+	time.Sleep(100 * time.Millisecond)
+
+	// Exit with the test status code
+	os.Exit(code)
+}
 
 // TestFactory tests the transport factory pattern.
 func TestFactory(t *testing.T) {

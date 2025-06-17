@@ -31,6 +31,7 @@ help:
 	@echo "  android          Build the Android .aar library"
 	@echo "  ios              Build the iOS .xcframework"
 	@echo "  test             Run all Go tests"
+	@echo "  test-race        Run all Go tests with the race detector"
 	@echo "  lint             Lint the codebase with golangci-lint"
 	@echo "  tidy             Tidy go.mod and go.sum files"
 	@echo "  clean            Remove all build artifacts"
@@ -73,9 +74,18 @@ test:
 	@echo "Running tests for standard packages..."
 	$(eval PKGS_TO_TEST := $(shell go list ./... | grep -v /mobile))
 	@echo "Running tests on packages: $(PKGS_TO_TEST)"
-	$(GOTEST) -timeout 30s -v $(PKGS_TO_TEST)
+	$(GOTEST) -timeout 30s -v -count=1 $(PKGS_TO_TEST)
 	@echo "Running mobile bridge tests specifically..."
-	$(GOTEST) -timeout 10s -v ./mobile/bridge
+	$(GOTEST) -timeout 10s -v -count=1 ./mobile/bridge
+
+.PHONY: test-race
+test-race:
+	@echo "Running tests with race detector..."
+	$(eval PKGS_TO_TEST := $(shell go list ./... | grep -v /mobile))
+	@echo "Running tests on packages: $(PKGS_TO_TEST)"
+	$(GOTEST) -timeout 60s -v -race -count=1 $(PKGS_TO_TEST)
+	@echo "Running mobile bridge tests specifically with race detector..."
+	$(GOTEST) -timeout 30s -v -race -count=1 ./mobile/bridge
 
 .PHONY: lint
 lint:

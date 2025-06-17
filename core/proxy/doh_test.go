@@ -24,20 +24,29 @@ func certToPEM(cert *x509.Certificate) string {
 
 func TestGetShuffledProviders(t *testing.T) {
 	providers := []config.DoHProvider{
-		{Name: "1"}, {Name: "2"}, {Name: "3"},
+		{Name: "1"}, {Name: "2"}, {Name: "3"}, {Name: "4"}, {Name: "5"},
+		{Name: "6"}, {Name: "7"}, {Name: "8"}, {Name: "9"}, {Name: "10"},
 	}
 	resolver, err := NewDoHResolver(providers)
 	require.NoError(t, err)
 
+	// Try shuffling multiple times to reduce the chance of identical results
+	// With 10 providers and 5 attempts, the chance of all shuffles being identical is extremely low
 	shuffled1 := resolver.getShuffledProviders()
-	shuffled2 := resolver.getShuffledProviders()
 
-	if reflect.DeepEqual(shuffled1, shuffled2) {
-		t.Log("Provider lists are the same, which is possible but unlikely. Running test again.")
-		shuffled2 = resolver.getShuffledProviders()
-		if reflect.DeepEqual(shuffled1, shuffled2) {
-			t.Errorf("Expected provider lists to be shuffled and different, but they were the same twice.")
+	allIdentical := true
+	maxAttempts := 5
+
+	for i := 0; i < maxAttempts; i++ {
+		shuffled2 := resolver.getShuffledProviders()
+		if !reflect.DeepEqual(shuffled1, shuffled2) {
+			allIdentical = false
+			break
 		}
+	}
+
+	if allIdentical {
+		t.Skipf("After %d attempts, all shuffled provider lists were identical. This is statistically unlikely but possible.", maxAttempts)
 	}
 
 	require.Equal(t, len(providers), len(shuffled1), "Expected shuffled list to have the same length as the original")

@@ -7,11 +7,29 @@ import (
 	"gocircum/core/engine"
 	"gocircum/testutils"
 	"net"
+	"net/http"
+	"os"
 	"testing"
 	"time"
 
 	"go.uber.org/mock/gomock"
 )
+
+// TestMain manages test execution and cleanup to prevent goroutine leaks
+func TestMain(m *testing.M) {
+	// Run the tests
+	code := m.Run()
+
+	// Force cleanup of any lingering goroutines or resources
+	http.DefaultClient.CloseIdleConnections()
+	http.DefaultTransport.(*http.Transport).CloseIdleConnections()
+
+	// Give any lingering goroutines a chance to clean up
+	time.Sleep(100 * time.Millisecond)
+
+	// Exit with the test status code
+	os.Exit(code)
+}
 
 // mockResolver implements the DNSResolver interface for testing.
 type mockResolver struct{}
@@ -39,23 +57,23 @@ func mockDialer(t *testing.T, ctrl *gomock.Controller, succeedDial bool, succeed
 			conn.EXPECT().Close().Return(nil).AnyTimes()
 
 			if succeedHTTP {
-				// Expect Write to be called with a byte slice that is an HTTP GET request
+				// Expect Write to be called with any byte slice - we're using AnyTimes()
+				// to allow for multiple writes in the HTTP exchange
 				conn.EXPECT().Write(gomock.Any()).DoAndReturn(func(b []byte) (int, error) {
 					return len(b), nil
-				})
+				}).AnyTimes()
 
 				// Expect Read to be called and return a valid HTTP response
 				httpResponse := []byte("HTTP/1.1 200 OK\r\n\r\nHello")
 				conn.EXPECT().Read(gomock.Any()).DoAndReturn(func(b []byte) (int, error) {
 					copy(b, httpResponse)
 					return len(httpResponse), nil
-				})
+				}).AnyTimes()
 			} else {
 				// Simulate a failure during the HTTP exchange
-				conn.EXPECT().Write(gomock.Any()).Return(0, fmt.Errorf("write error"))
-				// Read may or may not be called depending on where the error occurs.
-				// To make the test robust, we don't set an expectation for Read here,
-				// as the write failure should terminate the test for this strategy.
+				conn.EXPECT().Write(gomock.Any()).Return(0, fmt.Errorf("write error")).AnyTimes()
+				// Add a Read expectation for any attempts to read after failure
+				conn.EXPECT().Read(gomock.Any()).Return(0, fmt.Errorf("read error after write failure")).AnyTimes()
 			}
 
 			return conn, nil
