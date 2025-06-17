@@ -1,11 +1,18 @@
 package config
 
-import "fmt"
+import (
+	"crypto/x509"
+	"fmt"
+	"time"
+)
 
 // FileConfig represents the top-level structure of a configuration file.
 type FileConfig struct {
-	Proxy        *Proxy        `yaml:"proxy,omitempty"`
-	Fingerprints []Fingerprint `yaml:"fingerprints"`
+	Proxy          *Proxy        `yaml:"proxy,omitempty"`
+	Fingerprints   []Fingerprint `yaml:"fingerprints"`
+	CanaryDomains  []string      `yaml:"canary_domains,omitempty"`
+	Disabled       bool          `yaml:"disabled,omitempty"`
+	ConnectTimeout time.Duration `yaml:"connect_timeout,omitempty"`
 }
 
 func (c *FileConfig) Validate() error {
@@ -26,18 +33,36 @@ type Proxy struct {
 	ListenAddr string `yaml:"listen_addr"`
 }
 
+// DomainFronting configures domain fronting behavior.
+type DomainFronting struct {
+	FrontDomain  string `yaml:"front_domain"`
+	CovertTarget string `yaml:"covert_target"`
+	Enabled      bool   `yaml:"enabled"`
+}
+
 // Fingerprint defines a complete connection profile.
 type Fingerprint struct {
-	ID          string    `yaml:"id"`
-	Description string    `yaml:"description"`
-	Transport   Transport `yaml:"transport"`
-	TLS         TLS       `yaml:"tls"`
+	ID             string          `yaml:"id"`
+	Description    string          `yaml:"description"`
+	DomainFronting *DomainFronting `yaml:"domain_fronting,omitempty"`
+	Transport      Transport       `yaml:"transport"`
+	TLS            TLS             `yaml:"tls"`
 }
 
 func (f *Fingerprint) Validate() error {
 	if f.ID == "" {
 		return fmt.Errorf("fingerprint ID cannot be empty")
 	}
+
+	if f.DomainFronting != nil && f.DomainFronting.Enabled {
+		if f.DomainFronting.FrontDomain == "" {
+			return fmt.Errorf("front_domain must be set when domain_fronting is enabled")
+		}
+		if f.DomainFronting.CovertTarget == "" {
+			return fmt.Errorf("covert_target must be set when domain_fronting is enabled")
+		}
+	}
+
 	// Add more validation for Transport and TLS fields
 	return nil
 }
@@ -56,14 +81,17 @@ type Fragmentation struct {
 
 // TLS configures the TLS layer.
 type TLS struct {
-	Library       string `yaml:"library"`
-	ClientHelloID string `yaml:"client_hello_id"`
-	MinVersion    string `yaml:"min_version,omitempty"`
-	MaxVersion    string `yaml:"max_version,omitempty"`
-	// SkipVerify controls whether the client validates the server's certificate
-	// chain and host name. If SkipVerify is true, TLS accepts any certificate
-	// presented by the server and any host name in that certificate.
-	// In this mode, TLS is susceptible to man-in-the-middle attacks.
-	// This should be used only for testing.
-	SkipVerify bool `yaml:"skip_verify,omitempty"`
+	Library         string         `yaml:"library,omitempty"`         // go-stdlib, utls
+	ClientHelloID   string         `yaml:"client_hello_id,omitempty"` // e.g., "HelloChrome_102"
+	SkipVerify      *bool          `yaml:"skip_verify,omitempty"`     // DANGEROUS: Disables certificate validation
+	RootCAs         *x509.CertPool `yaml:"-"`                         // This will not be marshalled from/to YAML.
+	MinVersion      string         `yaml:"min_version,omitempty"`     // e.g., "1.2"
+	MaxVersion      string         `yaml:"max_version,omitempty"`     // e.g., "1.3"
+	CipherSuites    []string       `yaml:"cipher_suites,omitempty"`
+	ALPN            []string       `yaml:"alpn,omitempty"`
+	ECHEnabled      bool           `yaml:"ech_enabled,omitempty"`
+	ECHConfig       string         `yaml:"ech_config,omitempty"`
+	UTLSParrot      string         `yaml:"utls_parrot,omitempty"`
+	QUICNextProtos  []string       `yaml:"quic_next_protos,omitempty"`
+	QUICIdleTimeout time.Duration  `yaml:"quic_idle_timeout,omitempty"`
 }
