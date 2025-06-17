@@ -195,95 +195,92 @@ func establishHTTPConnectTunnel(conn net.Conn, covertTarget, finalDestination, u
 	return nil
 }
 
-func (e *Engine) createDialerForStrategy(fp *config.Fingerprint) (proxy.CustomDialer, error) {
-	// 1. Create the base dialer (TCP/QUIC with fragmentation)
-	factory := &engine.DefaultDialerFactory{}
-	baseDialer, err := factory.NewDialer(&fp.Transport, &fp.TLS)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create base dialer: %w", err)
-	}
+// createDomainFrontingDialer handles the secure connection logic for domain fronting.
+func (e *Engine) createDomainFrontingDialer(fp *config.Fingerprint, baseDialer engine.Dialer) (proxy.CustomDialer, error) {
+	return func(ctx context.Context, network, finalDestination string) (net.Conn, error) {
+		frontHost, frontPort, err := net.SplitHostPort(fp.DomainFronting.FrontDomain)
+		if err != nil {
+			frontHost = fp.DomainFronting.FrontDomain
+			frontPort = "443" // Default HTTPS port
+		}
 
-	// 2. Create the full dialer function that includes the TLS layer and secure resolution.
-	fullDialer := func(ctx context.Context, network, address string) (net.Conn, error) {
+		// Securely resolve fronting domain to an IP to prevent DNS leaks.
+		_, frontIP, err := e.ranker.DoHResolver.Resolve(ctx, frontHost)
+		if err != nil {
+			return nil, fmt.Errorf("securely resolving front domain %s failed: %w", frontHost, err)
+		}
+		dialAddr := net.JoinHostPort(frontIP.String(), frontPort)
+
+		// 1. Dial the front domain's IP address.
+		rawConn, err := baseDialer(ctx, network, dialAddr)
+		if err != nil {
+			return nil, fmt.Errorf("base dialer failed for front domain %s (%s): %w", frontHost, dialAddr, err)
+		}
+
+		// 2. Establish TLS with SNI set to the benign front domain.
+		tlsConn, err := engine.NewTLSClient(rawConn, &fp.TLS, frontHost, nil)
+		if err != nil {
+			rawConn.Close()
+			return nil, fmt.Errorf("tls client creation failed for front domain: %w", err)
+		}
+
+		// 3. Establish HTTP CONNECT tunnel to the actual destination.
+		if err := establishHTTPConnectTunnel(tlsConn, fp.DomainFronting.CovertTarget, finalDestination, fp.TLS.UserAgent); err != nil {
+			tlsConn.Close()
+			return nil, fmt.Errorf("http connect tunnel failed for %s: %w", finalDestination, err)
+		}
+
+		e.logger.Info("Domain fronting tunnel established", "final_destination", finalDestination)
+		return tlsConn, nil
+	}, nil
+}
+
+// createDirectDialer handles the insecure direct connection logic.
+func (e *Engine) createDirectDialer(fp *config.Fingerprint, baseDialer engine.Dialer) (proxy.CustomDialer, error) {
+	return func(ctx context.Context, network, address string) (net.Conn, error) {
 		host, port, err := net.SplitHostPort(address)
 		if err != nil {
 			return nil, fmt.Errorf("invalid destination address for SOCKS proxy: %s", address)
 		}
 
-		if fp.DomainFronting != nil && fp.DomainFronting.Enabled {
-			e.logger.Info("Using domain fronting", "strategy", fp.ID, "front_domain", fp.DomainFronting.FrontDomain)
-
-			frontHost, frontPort, err := net.SplitHostPort(fp.DomainFronting.FrontDomain)
-			if err != nil {
-				// Assume default port 443 if not specified
-				frontHost = fp.DomainFronting.FrontDomain
-				frontPort = "443"
-			}
-
-			// SECURE RESOLUTION: Resolve the fronting domain using DoH.
-			_, frontIP, err := e.ranker.DoHResolver.Resolve(ctx, frontHost)
-			if err != nil {
-				return nil, fmt.Errorf("securely resolving front domain %s failed: %w", frontHost, err)
-			}
-			dialAddr := net.JoinHostPort(frontIP.String(), frontPort)
-			sni := frontHost // SNI remains the original hostname
-
-			// 1. Dial the front domain's IP address
-			rawConn, err := baseDialer(ctx, network, dialAddr)
-			if err != nil {
-				return nil, fmt.Errorf("base dialer failed for front domain %s (%s): %w", frontHost, dialAddr, err)
-			}
-
-			// 2. Establish TLS with SNI set to front domain
-			tlsConn, err := engine.NewTLSClient(rawConn, &fp.TLS, sni, nil)
-			if err != nil {
-				rawConn.Close()
-				return nil, fmt.Errorf("tls client creation failed for front domain: %w", err)
-			}
-
-			// 3. Establish HTTP CONNECT tunnel to the actual destination ('address')
-			if err := establishHTTPConnectTunnel(tlsConn, fp.DomainFronting.CovertTarget, address, fp.TLS.UserAgent); err != nil {
-				tlsConn.Close()
-				return nil, fmt.Errorf("http connect tunnel failed for %s: %w", address, err)
-			}
-
-			e.logger.Info("Domain fronting tunnel established", "covert_target", address)
-			return tlsConn, nil
-		}
-
-		// Original path for non-domain-fronting
-		e.logger.Debug("Direct connection path", "host", host, "port", port)
-
-		// SECURE RESOLUTION: Resolve the target domain using DoH.
+		// Securely resolve the destination to an IP to prevent DNS leaks.
 		_, targetIP, err := e.ranker.DoHResolver.Resolve(ctx, host)
 		if err != nil {
 			return nil, fmt.Errorf("securely resolving target domain %s failed: %w", host, err)
 		}
 		dialAddr := net.JoinHostPort(targetIP.String(), port)
 
-		if !fp.TLS.ECHEnabled {
-			e.logger.Warn("Potential SNI leakage: Domain Fronting is not enabled and ECH is not configured for this strategy. SNI might be visible to censors.",
-				"strategy_id", fp.ID,
-				"target_host", host,
-			)
-		}
-
-		// Dial the resolved IP address
 		rawConn, err := baseDialer(ctx, network, dialAddr)
 		if err != nil {
 			return nil, fmt.Errorf("base dialer failed for %s (%s): %w", host, dialAddr, err)
 		}
 
-		// Ensure TLS client is created with the original host for SNI, not the IP
+		// Establish TLS with the real hostname as SNI (this is the leak).
 		tlsConn, err := engine.NewTLSClient(rawConn, &fp.TLS, host, nil)
 		if err != nil {
 			rawConn.Close()
 			return nil, fmt.Errorf("tls client creation failed: %w", err)
 		}
 		return tlsConn, nil
+	}, nil
+}
+
+func (e *Engine) createDialerForStrategy(fp *config.Fingerprint) (proxy.CustomDialer, error) {
+	factory := &engine.DefaultDialerFactory{}
+	baseDialer, err := factory.NewDialer(&fp.Transport, &fp.TLS)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create base dialer: %w", err)
 	}
 
-	return fullDialer, nil
+	if fp.DomainFronting != nil && fp.DomainFronting.Enabled {
+		// Path 1: Secure dialer using Domain Fronting to hide the true destination.
+		e.logger.Info("Creating dialer with Domain Fronting strategy.", "strategy_id", fp.ID)
+		return e.createDomainFrontingDialer(fp, baseDialer)
+	}
+
+	// Path 2: Insecure direct dialer with potential SNI leakage.
+	e.logger.Warn("SECURITY WARNING: Creating dialer with a direct connection strategy. The destination server name (SNI) will be visible to network observers, making this connection easy to block. Use Domain Fronting for robust censorship resistance.", "strategy_id", fp.ID)
+	return e.createDirectDialer(fp, baseDialer)
 }
 
 // GetBestStrategy finds the best available strategy by testing and ranking them.
