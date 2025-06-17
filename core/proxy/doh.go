@@ -2,46 +2,119 @@ package proxy
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
+	"math/big"
 	"net"
 	"net/http"
+	"net/url"
+	"sync"
 	"time"
+)
+
+// DoHProvider holds the configuration for a single DNS-over-HTTPS provider.
+type DoHProvider struct {
+	Name       string
+	URL        string   // e.g., "https://dns.cloudflare.com/dns-query"
+	ServerName string   // e.g., "dns.cloudflare.com"
+	Bootstrap  []string // List of IP:Port addresses for bootstrap
+}
+
+var (
+	// A list of trusted DoH providers.
+	dohProviders = []DoHProvider{
+		{
+			Name:       "Cloudflare",
+			URL:        "https://dns.cloudflare.com/dns-query",
+			ServerName: "dns.cloudflare.com",
+			Bootstrap:  []string{"1.1.1.1:443", "1.0.0.1:443"},
+		},
+		{
+			Name:       "Google",
+			URL:        "https://dns.google/resolve",
+			ServerName: "dns.google",
+			Bootstrap:  []string{"8.8.8.8:443", "8.8.4.4:443"},
+		},
+		{
+			Name:       "Quad9",
+			URL:        "https://dns.quad9.net/dns-query",
+			ServerName: "dns.quad9.net",
+			Bootstrap:  []string{"9.9.9.9:443", "149.112.112.112:443"},
+		},
+	}
+	mu sync.Mutex
 )
 
 // DoHResolver implements socks5.Resolver using DNS-over-HTTPS.
 type DoHResolver struct {
-	client      *http.Client
-	resolverURL string
+	providers []DoHProvider
 }
 
-// NewDoHResolver creates a secure resolver pointing to a trusted DoH provider.
+// NewDoHResolver creates a secure resolver that uses a set of trusted DoH providers.
 func NewDoHResolver() *DoHResolver {
-	// Bootstrap with a hardcoded IP to prevent initial DNS leaks.
-	// This is Cloudflare's 1.1.1.1.
+	return &DoHResolver{
+		providers: dohProviders,
+	}
+}
+
+// getShuffledProviders returns a shuffled copy of the DoH providers.
+func (r *DoHResolver) getShuffledProviders() []DoHProvider {
+	mu.Lock()
+	defer mu.Unlock()
+	shuffled := make([]DoHProvider, len(r.providers))
+	copy(shuffled, r.providers)
+
+	// Fisher-Yates shuffle using crypto/rand for secure, unpredictable shuffling.
+	for i := len(shuffled) - 1; i > 0; i-- {
+		j, err := rand.Int(rand.Reader, big.NewInt(int64(i+1)))
+		if err != nil {
+			// A failure in rand.Reader is a serious system issue.
+			// Returning the list unshuffled is a safe fallback.
+			return shuffled
+		}
+		shuffled[i], shuffled[j.Int64()] = shuffled[j.Int64()], shuffled[i]
+	}
+	return shuffled
+}
+
+var createClientForProvider = func(provider DoHProvider) *http.Client {
 	dialer := &net.Dialer{
 		Timeout:   10 * time.Second,
 		KeepAlive: 10 * time.Second,
 	}
 
 	transport := &http.Transport{
-		// Use a custom DialContext to force connection to the hardcoded IP.
 		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-			// The address will be "dns.cloudflare.com:443", but we ignore it
-			// and connect to the IP directly.
-			return dialer.DialContext(ctx, "tcp", "1.1.1.1:443")
+			shuffledBootstrap := make([]string, len(provider.Bootstrap))
+			copy(shuffledBootstrap, provider.Bootstrap)
+
+			// Fisher-Yates shuffle for bootstrap IPs.
+			for i := len(shuffledBootstrap) - 1; i > 0; i-- {
+				j, err := rand.Int(rand.Reader, big.NewInt(int64(i+1)))
+				if err != nil {
+					return nil, fmt.Errorf("failed to shuffle bootstrap IPs for %s: %w", provider.Name, err)
+				}
+				shuffledBootstrap[i], shuffledBootstrap[j.Int64()] = shuffledBootstrap[j.Int64()], shuffledBootstrap[i]
+			}
+
+			var lastErr error
+			for _, bootstrapAddr := range shuffledBootstrap {
+				conn, err := dialer.DialContext(ctx, "tcp", bootstrapAddr)
+				if err == nil {
+					return conn, nil
+				}
+				lastErr = err
+			}
+			return nil, fmt.Errorf("failed to connect to any bootstrap server for %s: %w", provider.Name, lastErr)
 		},
-		// The TLS ServerName must be set to the correct domain for validation.
-		TLSClientConfig: &tls.Config{ServerName: "dns.cloudflare.com"},
+		TLSClientConfig: &tls.Config{ServerName: provider.ServerName},
 	}
 
-	return &DoHResolver{
-		client: &http.Client{
-			Transport: transport,
-			Timeout:   10 * time.Second,
-		},
-		resolverURL: "https://dns.cloudflare.com/dns-query",
+	return &http.Client{
+		Transport: transport,
+		Timeout:   10 * time.Second,
 	}
 }
 
@@ -58,43 +131,63 @@ type DoHAnswer struct {
 	Data string `json:"data"`
 }
 
-// resolveWithRequest is a helper function to perform the DoH request and parse the response.
-func (r *DoHResolver) resolveWithRequest(req *http.Request) (context.Context, net.IP, error) {
-	ctx := req.Context()
-	resp, err := r.client.Do(req)
-	if err != nil {
-		return ctx, nil, fmt.Errorf("failed to perform DoH request: %w", err)
-	}
-	defer resp.Body.Close()
+// Resolve uses DoH to resolve a domain name, trying multiple providers on failure.
+func (r *DoHResolver) Resolve(ctx context.Context, name string) (context.Context, net.IP, error) {
+	shuffledProviders := r.getShuffledProviders()
+	var lastErr error
 
-	if resp.StatusCode != http.StatusOK {
-		return ctx, nil, fmt.Errorf("DoH request failed with status: %s", resp.Status)
-	}
+	for _, provider := range shuffledProviders {
+		client := createClientForProvider(provider)
 
-	var dohResponse DoHResponse
-	if err := json.NewDecoder(resp.Body).Decode(&dohResponse); err != nil {
-		return ctx, nil, fmt.Errorf("failed to decode DoH response: %w", err)
-	}
+		reqURL, err := url.Parse(provider.URL)
+		if err != nil {
+			lastErr = fmt.Errorf("invalid URL for provider %s: %w", provider.Name, err)
+			continue
+		}
+		q := reqURL.Query()
+		q.Set("name", name)
+		reqURL.RawQuery = q.Encode()
 
-	for _, answer := range dohResponse.Answer {
-		// Type 1 is an A record (IPv4).
-		if answer.Type == 1 {
-			ip := net.ParseIP(answer.Data)
-			if ip != nil {
-				return ctx, ip, nil
+		req, err := http.NewRequestWithContext(ctx, "GET", reqURL.String(), nil)
+		if err != nil {
+			lastErr = fmt.Errorf("failed to create DoH request for %s: %w", provider.Name, err)
+			continue
+		}
+		req.Header.Set("Accept", "application/dns-json")
+
+		resp, err := client.Do(req)
+		if err != nil {
+			lastErr = fmt.Errorf("failed to perform DoH request to %s: %w", provider.Name, err)
+			continue
+		}
+
+		if resp.StatusCode != http.StatusOK {
+			resp.Body.Close()
+			lastErr = fmt.Errorf("DoH request to %s failed with status: %s", provider.Name, resp.Status)
+			continue
+		}
+
+		var dohResponse DoHResponse
+		if err := json.NewDecoder(resp.Body).Decode(&dohResponse); err != nil {
+			resp.Body.Close()
+			lastErr = fmt.Errorf("failed to decode DoH response from %s: %w", provider.Name, err)
+			continue
+		}
+		resp.Body.Close()
+
+		for _, answer := range dohResponse.Answer {
+			// Type 1 is an A record (IPv4).
+			if answer.Type == 1 {
+				ip := net.ParseIP(answer.Data)
+				if ip != nil {
+					return ctx, ip, nil
+				}
 			}
 		}
+		// If we are here, we got a valid response, but no A record.
+		// We can consider this a "soft" failure and try the next provider.
+		lastErr = fmt.Errorf("no A records found for %s from %s", name, provider.Name)
 	}
 
-	return ctx, nil, fmt.Errorf("no A records found for %s", req.URL.Query().Get("name"))
-}
-
-// Resolve uses DoH to resolve a domain name.
-func (r *DoHResolver) Resolve(ctx context.Context, name string) (context.Context, net.IP, error) {
-	req, err := http.NewRequestWithContext(ctx, "GET", r.resolverURL+"?name="+name, nil)
-	if err != nil {
-		return ctx, nil, fmt.Errorf("failed to create DoH request: %w", err)
-	}
-	req.Header.Set("Accept", "application/dns-json")
-	return r.resolveWithRequest(req)
+	return ctx, nil, fmt.Errorf("failed to resolve domain %s using any DoH provider: %w", name, lastErr)
 }

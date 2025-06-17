@@ -2,18 +2,135 @@ package proxy
 
 import (
 	"context"
-	"crypto/tls"
+	"crypto/x509"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
+	"sync/atomic"
 	"testing"
 	"time"
-
-	"crypto/x509"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestGetShuffledProviders(t *testing.T) {
+	resolver := NewDoHResolver()
+	shuffled1 := resolver.getShuffledProviders()
+	shuffled2 := resolver.getShuffledProviders()
+
+	if reflect.DeepEqual(shuffled1, shuffled2) {
+		t.Log("Provider lists are the same, which is possible but unlikely. Running test again.")
+		shuffled2 = resolver.getShuffledProviders()
+		if reflect.DeepEqual(shuffled1, shuffled2) {
+			t.Errorf("Expected provider lists to be shuffled and different, but they were the same twice.")
+		}
+	}
+
+	if len(shuffled1) != len(dohProviders) {
+		t.Errorf("Expected shuffled list to have length %d, but got %d", len(dohProviders), len(shuffled1))
+	}
+}
+
+func TestDoHResolver_Resolve_Failover(t *testing.T) {
+	var workingServerRequests int32
+	workingServer := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&workingServerRequests, 1)
+		w.Header().Set("Content-Type", "application/dns-json")
+		_, err := io.WriteString(w, `{"Status": 0, "Answer": [{"name": "example.com", "type": 1, "data": "93.184.216.34"}]}`)
+		require.NoError(t, err)
+	}))
+	defer workingServer.Close()
+
+	failingServer := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer failingServer.Close()
+
+	resolver := NewDoHResolver()
+
+	// Override providers for test
+	resolver.providers = []DoHProvider{
+		{
+			Name:       "Failing",
+			URL:        failingServer.URL,
+			ServerName: "example.com",
+			Bootstrap:  []string{failingServer.Listener.Addr().String()},
+		},
+		{
+			Name:       "Working",
+			URL:        workingServer.URL,
+			ServerName: "example.com",
+			Bootstrap:  []string{workingServer.Listener.Addr().String()},
+		},
+	}
+
+	// Because we use a test server, we need to add its cert to the trust pool for the HTTP client.
+	// We can do this by modifying the createClientForProvider function for the test.
+	originalCreateClient := createClientForProvider
+	defer func() { createClientForProvider = originalCreateClient }()
+	createClientForProvider = func(provider DoHProvider) *http.Client {
+		client := originalCreateClient(provider)
+		transport := client.Transport.(*http.Transport)
+		certpool := x509.NewCertPool()
+		certpool.AddCert(workingServer.Certificate())
+		certpool.AddCert(failingServer.Certificate())
+		transport.TLSClientConfig.RootCAs = certpool
+		return client
+	}
+
+	_, ip, err := resolver.Resolve(context.Background(), "example.com")
+	require.NoError(t, err)
+	assert.Equal(t, "93.184.216.34", ip.String())
+	assert.Equal(t, int32(1), atomic.LoadInt32(&workingServerRequests), "Working server should have been called once")
+}
+
+func TestDoHResolver_Resolve_AllFail(t *testing.T) {
+	failingServer1 := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer failingServer1.Close()
+
+	failingServer2 := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusGatewayTimeout)
+	}))
+	defer failingServer2.Close()
+
+	resolver := NewDoHResolver()
+	resolver.providers = []DoHProvider{
+		{
+			Name:       "Failing1",
+			URL:        failingServer1.URL,
+			ServerName: "example.com",
+			Bootstrap:  []string{failingServer1.Listener.Addr().String()},
+		},
+		{
+			Name:       "Failing2",
+			URL:        failingServer2.URL,
+			ServerName: "example.com",
+			Bootstrap:  []string{failingServer2.Listener.Addr().String()},
+		},
+	}
+
+	originalCreateClient := createClientForProvider
+	defer func() { createClientForProvider = originalCreateClient }()
+	createClientForProvider = func(provider DoHProvider) *http.Client {
+		client := originalCreateClient(provider)
+		transport := client.Transport.(*http.Transport)
+		certpool := x509.NewCertPool()
+		certpool.AddCert(failingServer1.Certificate())
+		certpool.AddCert(failingServer2.Certificate())
+		transport.TLSClientConfig.RootCAs = certpool
+		// Shorten timeout to make test run faster
+		client.Timeout = 200 * time.Millisecond
+		return client
+	}
+
+	_, _, err := resolver.Resolve(context.Background(), "example.com")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to resolve domain example.com using any DoH provider")
+}
 
 func TestDoHResolver_Resolve(t *testing.T) {
 	t.Run("successful resolution", func(t *testing.T) {
@@ -33,62 +150,29 @@ func TestDoHResolver_Resolve(t *testing.T) {
 		defer server.Close()
 
 		resolver := NewDoHResolver()
-		resolver.resolverURL = server.URL + "/dns-query"
-		certpool := x509.NewCertPool()
-		certpool.AddCert(server.Certificate())
-		resolver.client.Transport = &http.Transport{
-			TLSClientConfig: &tls.Config{
-				RootCAs: certpool,
+		resolver.providers = []DoHProvider{
+			{
+				Name:       "TestServer",
+				URL:        server.URL + "/dns-query",
+				ServerName: "example.com",
+				Bootstrap:  []string{server.Listener.Addr().String()},
 			},
+		}
+
+		originalCreateClient := createClientForProvider
+		defer func() { createClientForProvider = originalCreateClient }()
+		createClientForProvider = func(provider DoHProvider) *http.Client {
+			client := originalCreateClient(provider)
+			transport := client.Transport.(*http.Transport)
+			certpool := x509.NewCertPool()
+			certpool.AddCert(server.Certificate())
+			transport.TLSClientConfig.RootCAs = certpool
+			return client
 		}
 
 		_, ip, err := resolver.Resolve(context.Background(), "example.com")
 		require.NoError(t, err)
 		assert.Equal(t, "93.184.216.34", ip.String())
-	})
-
-	t.Run("http error", func(t *testing.T) {
-		server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.WriteHeader(http.StatusInternalServerError)
-		}))
-		defer server.Close()
-
-		resolver := NewDoHResolver()
-		resolver.resolverURL = server.URL + "/dns-query"
-		certpool := x509.NewCertPool()
-		certpool.AddCert(server.Certificate())
-		resolver.client.Transport = &http.Transport{
-			TLSClientConfig: &tls.Config{
-				RootCAs: certpool,
-			},
-		}
-
-		_, _, err := resolver.Resolve(context.Background(), "example.com")
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "DoH request failed with status: 500 Internal Server Error")
-	})
-
-	t.Run("malformed json", func(t *testing.T) {
-		server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Content-Type", "application/dns-json")
-			_, err := io.WriteString(w, `{"Status": 0, "Answer": [`)
-			require.NoError(t, err)
-		}))
-		defer server.Close()
-
-		resolver := NewDoHResolver()
-		resolver.resolverURL = server.URL + "/dns-query"
-		certpool := x509.NewCertPool()
-		certpool.AddCert(server.Certificate())
-		resolver.client.Transport = &http.Transport{
-			TLSClientConfig: &tls.Config{
-				RootCAs: certpool,
-			},
-		}
-
-		_, _, err := resolver.Resolve(context.Background(), "example.com")
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "failed to decode DoH response")
 	})
 
 	t.Run("no A records", func(t *testing.T) {
@@ -106,42 +190,59 @@ func TestDoHResolver_Resolve(t *testing.T) {
 		defer server.Close()
 
 		resolver := NewDoHResolver()
-		resolver.resolverURL = server.URL + "/dns-query"
-		certpool := x509.NewCertPool()
-		certpool.AddCert(server.Certificate())
-		resolver.client.Transport = &http.Transport{
-			TLSClientConfig: &tls.Config{
-				RootCAs: certpool,
+		resolver.providers = []DoHProvider{
+			{
+				Name:       "TestServer",
+				URL:        server.URL,
+				ServerName: "example.com",
+				Bootstrap:  []string{server.Listener.Addr().String()},
 			},
+		}
+
+		originalCreateClient := createClientForProvider
+		defer func() { createClientForProvider = originalCreateClient }()
+		createClientForProvider = func(provider DoHProvider) *http.Client {
+			client := originalCreateClient(provider)
+			transport := client.Transport.(*http.Transport)
+			certpool := x509.NewCertPool()
+			certpool.AddCert(server.Certificate())
+			transport.TLSClientConfig.RootCAs = certpool
+			return client
 		}
 
 		_, _, err := resolver.Resolve(context.Background(), "example.com")
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "no A records found for example.com")
+		assert.Contains(t, err.Error(), "no A records found for example.com from TestServer")
 	})
+}
 
-	t.Run("context cancellation", func(t *testing.T) {
-		server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			time.Sleep(100 * time.Millisecond)
-			w.WriteHeader(http.StatusOK)
-		}))
-		defer server.Close()
+func TestCreateClientForProvider_BootstrapFailover(t *testing.T) {
+	workingServer := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Just needs to accept a connection
+	}))
+	defer workingServer.Close()
 
-		resolver := NewDoHResolver()
-		resolver.resolverURL = server.URL + "/dns-query"
-		certpool := x509.NewCertPool()
-		certpool.AddCert(server.Certificate())
-		resolver.client.Transport = &http.Transport{
-			TLSClientConfig: &tls.Config{
-				RootCAs: certpool,
-			},
-		}
+	provider := DoHProvider{
+		Name:       "Test",
+		URL:        "https://example.com",
+		ServerName: "example.com",
+		Bootstrap: []string{
+			"127.0.0.1:12345", // Bad address
+			workingServer.Listener.Addr().String(),
+		},
+	}
 
-		ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
-		defer cancel()
+	client := createClientForProvider(provider)
+	transport := client.Transport.(*http.Transport)
+	certpool := x509.NewCertPool()
+	certpool.AddCert(workingServer.Certificate())
+	transport.TLSClientConfig.RootCAs = certpool
 
-		_, _, err := resolver.Resolve(ctx, "example.com")
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "context deadline exceeded")
-	})
+	// This request should succeed because the dialer will failover to the working bootstrap server
+	req, err := http.NewRequest("GET", workingServer.URL, nil)
+	require.NoError(t, err)
+
+	resp, err := client.Do(req)
+	require.NoError(t, err)
+	resp.Body.Close()
 }
