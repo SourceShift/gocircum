@@ -1,6 +1,7 @@
 package core
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"gocircum/core/config"
@@ -9,22 +10,25 @@ import (
 	"gocircum/core/ranker"
 	"gocircum/pkg/logging"
 	"net"
+	"net/http"
 	"sync"
 )
 
 // Engine is the main controller for the circumvention library.
 type Engine struct {
 	ranker         *ranker.Ranker
-	fingerprints   []config.Fingerprint
+	config         *config.FileConfig
 	activeProxy    *proxy.Proxy
 	mu             sync.Mutex
 	proxyErrorChan chan error
+	lastProxyError error
 	logger         logging.Logger
+	cancelProxy    context.CancelFunc
 }
 
 // NewEngine creates a new core engine with a given set of fingerprints.
-func NewEngine(fingerprints []config.Fingerprint, logger logging.Logger) (*Engine, error) {
-	if len(fingerprints) == 0 {
+func NewEngine(cfg *config.FileConfig, logger logging.Logger) (*Engine, error) {
+	if len(cfg.Fingerprints) == 0 {
 		return nil, fmt.Errorf("engine must be initialized with at least one fingerprint")
 	}
 	if logger == nil {
@@ -32,7 +36,7 @@ func NewEngine(fingerprints []config.Fingerprint, logger logging.Logger) (*Engin
 	}
 	return &Engine{
 		ranker:         ranker.NewRanker(logger),
-		fingerprints:   fingerprints,
+		config:         cfg,
 		proxyErrorChan: make(chan error, 1),
 		logger:         logger.With("component", "engine"),
 	}, nil
@@ -53,6 +57,11 @@ func (e *Engine) Stop() error {
 		return fmt.Errorf("proxy is not running")
 	}
 
+	if e.cancelProxy != nil {
+		e.cancelProxy()
+		e.cancelProxy = nil
+	}
+
 	err := e.activeProxy.Stop()
 	if err != nil {
 		return fmt.Errorf("failed to stop proxy: %w", err)
@@ -62,14 +71,34 @@ func (e *Engine) Stop() error {
 }
 
 // Status returns the current status of the proxy.
-func (e *Engine) Status() string {
+func (e *Engine) Status() (string, error) {
 	e.mu.Lock()
-	defer e.mu.Unlock()
+	proxy := e.activeProxy
+	lastErr := e.lastProxyError
+	e.mu.Unlock()
 
-	if e.activeProxy != nil {
-		return fmt.Sprintf("Proxy running on %s", e.activeProxy.Addr())
+	// Check for a new failure message first.
+	select {
+	case err := <-e.proxyErrorChan:
+		e.mu.Lock()
+		e.lastProxyError = err
+		lastErr = err
+		e.mu.Unlock()
+		e.logger.Error("Proxy has failed", "error", err)
+	default:
+		// No immediate error, proceed.
 	}
-	return "Proxy stopped"
+
+	// If we have a stored error, that's our state.
+	if lastErr != nil {
+		return "Proxy failed", lastErr
+	}
+
+	if proxy != nil {
+		return fmt.Sprintf("Proxy running on %s", proxy.Addr()), nil
+	}
+
+	return "Proxy stopped", nil
 }
 
 // TestStrategies tests all available fingerprints and returns the ranked results.
@@ -77,10 +106,10 @@ func (e *Engine) TestStrategies(ctx context.Context) ([]ranker.StrategyResult, e
 	e.logger.Info("Testing all strategies...")
 	// Convert to slice of pointers for the ranker
 	var fps []*config.Fingerprint
-	for i := range e.fingerprints {
-		fps = append(fps, &e.fingerprints[i])
+	for i := range e.config.Fingerprints {
+		fps = append(fps, &e.config.Fingerprints[i])
 	}
-	results, err := e.ranker.TestAndRank(ctx, fps)
+	results, err := e.ranker.TestAndRank(ctx, fps, e.config.CanaryDomains)
 	if err != nil {
 		e.logger.Error("Failed to test and rank strategies", "error", err)
 	} else {
@@ -110,20 +139,63 @@ func (e *Engine) StartProxyWithStrategy(ctx context.Context, addr string, fp *co
 	}
 	e.activeProxy = p
 
+	// Create a new context for this proxy instance that we can cancel.
+	_, cancel := context.WithCancel(context.Background())
+	e.cancelProxy = cancel
+
+	// Reset error state for the new proxy instance
+	e.proxyErrorChan = make(chan error, 1)
+	e.lastProxyError = nil
+
 	go func() {
 		e.logger.Info("Starting proxy with strategy", "strategy", fp.Description, "address", p.Addr())
-		err := p.Start()
+		err := p.Start() // This is a blocking call
 
+		// After Start() returns, the proxy has stopped, either gracefully or due to an error.
 		e.mu.Lock()
 		defer e.mu.Unlock()
-		// If the proxy was stopped gracefully, err will be non-nil.
-		// We should only store the error if it was not a graceful stop.
-		// A graceful stop is signaled by setting e.activeProxy to nil.
-		if e.activeProxy != nil {
-			e.proxyErrorChan <- err
-			e.activeProxy = nil // Reset proxy on error
+
+		// If the proxy instance is the one we started, it means it wasn't a planned Stop().
+		if e.activeProxy == p {
+			if err != nil {
+				e.logger.Error("Proxy stopped with an error", "error", err)
+				// Use a non-blocking send in case the channel is full or no one is listening.
+				select {
+				case e.proxyErrorChan <- err:
+				default:
+				}
+			}
+			e.activeProxy = nil // It has stopped, so clear it.
 		}
+		// If e.activeProxy is nil or a different instance, it means Stop() was called.
+		// In that case, we don't need to do anything.
 	}()
+
+	return nil
+}
+
+// establishHTTPConnectTunnel sends an HTTP CONNECT request to establish a tunnel.
+func establishHTTPConnectTunnel(conn net.Conn, covertTarget, finalDestination string) error {
+	req, err := http.NewRequest("CONNECT", "http://"+finalDestination, nil)
+	if err != nil {
+		return fmt.Errorf("failed to create CONNECT request: %w", err)
+	}
+	req.Host = covertTarget
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/96.0.4664.110 Safari/537.36")
+
+	if err := req.Write(conn); err != nil {
+		return fmt.Errorf("failed to write CONNECT request: %w", err)
+	}
+
+	resp, err := http.ReadResponse(bufio.NewReader(conn), req)
+	if err != nil {
+		return fmt.Errorf("failed to read CONNECT response: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("CONNECT request failed with status: %s", resp.Status)
+	}
 
 	return nil
 }
@@ -138,12 +210,51 @@ func (e *Engine) createDialerForStrategy(fp *config.Fingerprint) (proxy.CustomDi
 
 	// 2. Create the full dialer function that includes the TLS layer
 	fullDialer := func(ctx context.Context, network, address string) (net.Conn, error) {
-		rawConn, err := baseDialer(ctx, network, address)
-		if err != nil {
-			return nil, fmt.Errorf("base dialer failed: %w", err)
+		if fp.DomainFronting != nil && fp.DomainFronting.Enabled {
+			e.logger.Info("Using domain fronting", "strategy", fp.ID, "front_domain", fp.DomainFronting.FrontDomain)
+
+			// For domain fronting, we dial the front domain. 'address' is the final destination.
+			dialAddr := fp.DomainFronting.FrontDomain
+			sni := fp.DomainFronting.FrontDomain
+
+			// 1. Dial the front domain
+			rawConn, err := baseDialer(ctx, network, dialAddr)
+			if err != nil {
+				return nil, fmt.Errorf("base dialer failed for front domain %s: %w", dialAddr, err)
+			}
+
+			// 2. Establish TLS with SNI set to front domain
+			tlsConn, err := engine.NewTLSClient(rawConn, &fp.TLS, sni, nil)
+			if err != nil {
+				rawConn.Close()
+				return nil, fmt.Errorf("tls client creation failed for front domain: %w", err)
+			}
+
+			// 3. Establish HTTP CONNECT tunnel to the actual destination ('address')
+			if err := establishHTTPConnectTunnel(tlsConn, fp.DomainFronting.CovertTarget, address); err != nil {
+				tlsConn.Close()
+				return nil, fmt.Errorf("http connect tunnel failed for %s: %w", address, err)
+			}
+
+			e.logger.Info("Domain fronting tunnel established", "covert_target", address)
+			return tlsConn, nil
 		}
 
-		tlsConn, err := engine.NewTLSClient(rawConn, &fp.TLS)
+		// Original path for non-domain-fronting
+		host, _, err := net.SplitHostPort(address)
+		if err != nil {
+			// If SplitHostPort fails, it might be because the port is missing.
+			// In that case, the address is likely the host.
+			// We log a warning but proceed.
+			e.logger.Warn("Could not split host/port, using address as host for SNI", "address", address, "error", err)
+			host = address
+		}
+		rawConn, err := baseDialer(ctx, network, address)
+		if err != nil {
+			return nil, fmt.Errorf("base dialer failed for %s: %w", address, err)
+		}
+
+		tlsConn, err := engine.NewTLSClient(rawConn, &fp.TLS, host, nil) // Pass parsed host as SNI
 		if err != nil {
 			rawConn.Close()
 			return nil, fmt.Errorf("tls client creation failed: %w", err)
@@ -159,10 +270,10 @@ func (e *Engine) GetBestStrategy(ctx context.Context) (*config.Fingerprint, erro
 	e.logger.Info("Getting best strategy...")
 	// Convert to slice of pointers for the ranker
 	var fps []*config.Fingerprint
-	for i := range e.fingerprints {
-		fps = append(fps, &e.fingerprints[i])
+	for i := range e.config.Fingerprints {
+		fps = append(fps, &e.config.Fingerprints[i])
 	}
-	results, err := e.ranker.TestAndRank(ctx, fps)
+	results, err := e.ranker.TestAndRank(ctx, fps, e.config.CanaryDomains)
 	if err != nil {
 		return nil, fmt.Errorf("failed to test and rank strategies: %w", err)
 	}
@@ -180,9 +291,9 @@ func (e *Engine) GetBestStrategy(ctx context.Context) (*config.Fingerprint, erro
 
 // GetStrategyByID returns a strategy fingerprint by its ID.
 func (e *Engine) GetStrategyByID(id string) (*config.Fingerprint, error) {
-	for i, fp := range e.fingerprints {
+	for i, fp := range e.config.Fingerprints {
 		if fp.ID == id {
-			return &e.fingerprints[i], nil
+			return &e.config.Fingerprints[i], nil
 		}
 	}
 	return nil, fmt.Errorf("strategy with ID '%s' not found", id)

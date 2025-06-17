@@ -3,6 +3,7 @@ package ranker
 import (
 	"container/list"
 	"context"
+	"fmt"
 	"gocircum/core/config"
 	"gocircum/core/engine"
 	"gocircum/pkg/logging"
@@ -11,14 +12,6 @@ import (
 	"sync"
 	"time"
 )
-
-var CanaryDomains = []string{
-	"www.cloudflare.com:443",
-	"www.google.com:443",
-	"www.amazon.com:443",
-	"www.microsoft.com:443",
-	"www.apple.com:443",
-}
 
 // StrategyResult holds the outcome of testing a single fingerprint.
 type StrategyResult struct {
@@ -56,7 +49,7 @@ func NewRanker(logger logging.Logger) *Ranker {
 }
 
 // TestAndRank sorts fingerprints by success and latency.
-func (r *Ranker) TestAndRank(ctx context.Context, fingerprints []*config.Fingerprint) ([]StrategyResult, error) {
+func (r *Ranker) TestAndRank(ctx context.Context, fingerprints []*config.Fingerprint, canaryDomains []string) ([]StrategyResult, error) {
 	results := make(chan StrategyResult, len(fingerprints))
 	for _, fp := range fingerprints {
 		go func(fingerprint *config.Fingerprint) {
@@ -75,7 +68,7 @@ func (r *Ranker) TestAndRank(ctx context.Context, fingerprints []*config.Fingerp
 				return
 			}
 			r.Logger.Debug("cache miss", "strategy_id", fingerprint.ID)
-			success, latency, err := r.testStrategy(ctx, fingerprint)
+			success, latency, err := r.testStrategy(ctx, fingerprint, canaryDomains)
 			if err != nil {
 				r.Logger.Warn("testing strategy failed", "strategy_id", fingerprint.ID, "error", err)
 			}
@@ -119,7 +112,7 @@ func (r *Ranker) TestAndRank(ctx context.Context, fingerprints []*config.Fingerp
 }
 
 // testStrategy performs a single connection test.
-func (r *Ranker) testStrategy(ctx context.Context, fingerprint *config.Fingerprint) (bool, time.Duration, error) {
+func (r *Ranker) testStrategy(ctx context.Context, fingerprint *config.Fingerprint, canaryDomains []string) (bool, time.Duration, error) {
 	dialer, err := r.DialerFactory.NewDialer(&fingerprint.Transport, &fingerprint.TLS)
 	if err != nil {
 		return false, 0, err
@@ -129,7 +122,10 @@ func (r *Ranker) testStrategy(ctx context.Context, fingerprint *config.Fingerpri
 	time.Sleep(time.Duration(50+rand.Intn(200)) * time.Millisecond)
 
 	// Randomly select a canary domain
-	domain := CanaryDomains[rand.Intn(len(CanaryDomains))]
+	if len(canaryDomains) == 0 {
+		return false, 0, fmt.Errorf("no canary domains provided")
+	}
+	domain := canaryDomains[rand.Intn(len(canaryDomains))]
 
 	start := time.Now()
 	conn, err := dialer(ctx, "tcp", domain)

@@ -57,7 +57,8 @@ func TestRanker_TestAndRank(t *testing.T) {
 		{ID: "fp3", TLS: config.TLS{ClientHelloID: "fp3"}}, // Should fail
 	}
 
-	results, err := ranker.TestAndRank(context.Background(), fingerprints)
+	canaryDomains := []string{"www.example.com:443"}
+	results, err := ranker.TestAndRank(context.Background(), fingerprints, canaryDomains)
 	if err != nil {
 		t.Fatalf("TestAndRank failed: %v", err)
 	}
