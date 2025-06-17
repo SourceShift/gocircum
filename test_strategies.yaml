@@ -1,5 +1,5 @@
 canary_domains:
-  - "www.example.com:443"
+  - "www.example.com"
 
 fingerprints:
   - id: "test_tcp_stdlib"

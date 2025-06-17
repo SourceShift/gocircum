@@ -11,6 +11,7 @@ import (
 	"gocircum/interfaces"
 	"gocircum/pkg/logging"
 	"sync"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -123,16 +124,16 @@ func (b *Bridge) start(configJSON string, updater StatusUpdater) error {
 	var ctx context.Context
 	ctx, b.cancel = context.WithCancel(context.Background())
 
-	addr := "127.0.0.1:1080"
+	listenAddr := "127.0.0.1:1080" // Default SOCKS5 address
 	if cfg.Proxy != nil && cfg.Proxy.ListenAddr != "" {
-		addr = cfg.Proxy.ListenAddr
+		listenAddr = cfg.Proxy.ListenAddr
 	}
 
 	b.wg.Add(1)
 	go func() {
 		defer b.wg.Done()
-		logger.Info("Starting SOCKS5 proxy", "address", addr)
-		err := b.engine.StartProxyWithStrategy(ctx, addr, bestStrategy)
+		logger.Info("Starting SOCKS5 proxy", "address", listenAddr)
+		_, err := b.engine.StartProxyWithStrategy(ctx, listenAddr, bestStrategy)
 		if err != nil {
 			logger.Error("Proxy stopped with error", "error", err)
 			// This error is expected on graceful shutdown, so we check the context.
@@ -142,7 +143,17 @@ func (b *Bridge) start(configJSON string, updater StatusUpdater) error {
 		}
 	}()
 
-	updater.OnStatusUpdate("CONNECTED", "Proxy is running on "+addr)
+	// The actual address might be different if a random port was used (e.g., "127.0.0.1:0").
+	// We wait a moment for the proxy to start and get its real address.
+	// A more robust solution might use a channel to communicate the address back.
+	time.Sleep(100 * time.Millisecond) // Give it a moment to start
+	status, err := b.engine.Status()
+	if err != nil {
+		b.engine = nil
+		return fmt.Errorf("proxy failed to start: %w", err)
+	}
+
+	updater.OnStatusUpdate("CONNECTED", status)
 	return nil
 }
 
