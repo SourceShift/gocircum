@@ -29,7 +29,7 @@ func TestStartEngine_DynamicConfig(t *testing.T) {
 				ID:          "test-tcp",
 				Description: "Test TCP strategy",
 				Transport:   config.Transport{Protocol: "tcp"},
-				TLS:         config.TLS{Library: "stdlib", SkipVerify: func() *bool { b := true; return &b }(), MinVersion: "1.2", MaxVersion: "1.3"}, // Skip verify for mock server
+				TLS:         config.TLS{Library: "utls", ClientHelloID: "HelloChrome_Auto", MinVersion: "1.2", MaxVersion: "1.3"},
 			},
 		},
 		CanaryDomains: []string{server.Addr()},

@@ -86,7 +86,6 @@ type TLS struct {
 	Library         string         `yaml:"library,omitempty"`         // go-stdlib, utls
 	ClientHelloID   string         `yaml:"client_hello_id,omitempty"` // e.g., "HelloChrome_102"
 	UserAgent       string         `yaml:"user_agent,omitempty"`
-	SkipVerify      *bool          `yaml:"skip_verify,omitempty"` // DANGEROUS: Disables certificate validation
 	RootCAs         *x509.CertPool `yaml:"-"`                     // This will not be marshalled from/to YAML.
 	MinVersion      string         `yaml:"min_version,omitempty"` // e.g., "1.2"
 	MaxVersion      string         `yaml:"max_version,omitempty"` // e.g., "1.3"

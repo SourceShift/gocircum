@@ -15,20 +15,4 @@ func TestBuildUTLSConfig(t *testing.T) {
 		require.NoError(t, err)
 		assert.False(t, utlsConfig.InsecureSkipVerify)
 	})
-
-	t.Run("InsecureIsIgnored", func(t *testing.T) {
-		skipVerify := true
-		cfg := &config.TLS{SkipVerify: &skipVerify, MinVersion: "1.2", MaxVersion: "1.3"}
-		utlsConfig, err := buildUTLSConfig("example.com", cfg, nil)
-		require.NoError(t, err)
-		assert.False(t, utlsConfig.InsecureSkipVerify)
-	})
-
-	t.Run("ExplicitlySecure", func(t *testing.T) {
-		skipVerify := false
-		cfg := &config.TLS{SkipVerify: &skipVerify, MinVersion: "1.2", MaxVersion: "1.3"}
-		utlsConfig, err := buildUTLSConfig("example.com", cfg, nil)
-		require.NoError(t, err)
-		assert.False(t, utlsConfig.InsecureSkipVerify)
-	})
 }

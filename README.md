@@ -147,7 +147,6 @@ fingerprints:
       client_hello_id: "HelloChrome_Auto"
       min_version: "1.3"
       max_version: "1.3"
-      skip_verify: false
 
   - id: "tcp_fragment_utls_firefox"
     description: "TCP with fragmentation and uTLS Firefox"
@@ -163,7 +162,6 @@ fingerprints:
       client_hello_id: "HelloFirefox_Auto"
       min_version: "1.3"
       max_version: "1.3"
-      skip_verify: false
 ```
 
 ## Platform Support

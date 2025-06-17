@@ -62,14 +62,6 @@ func newUTLSClient(conn net.Conn, serverName string, cfg *config.TLS, rootCAs *x
 }
 
 func buildUTLSConfig(serverName string, cfg *config.TLS, rootCAs *x509.CertPool) (*utls.Config, error) {
-	// For uTLS, we log a warning but always enforce verification.
-	if cfg.SkipVerify != nil && *cfg.SkipVerify {
-		logging.GetLogger().Warn("SECURITY WARNING: 'skip_verify: true' is configured, but this option is deprecated and IGNORED. TLS certificate validation is enforced.",
-			"risk", "Man-in-the-Middle (MITM) attacks",
-			"advice", "Remove 'skip_verify: true' from your configuration. This option is for testing only.",
-		)
-	}
-
 	minVersion, ok := constants.TLSVersionMap[cfg.MinVersion]
 	if !ok {
 		return nil, fmt.Errorf("unknown min TLS version: %s", cfg.MinVersion)
