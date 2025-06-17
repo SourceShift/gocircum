@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"gocircum/core/config"
+	"gocircum/pkg/logging"
 	"math/big"
 	"net"
 	"net/http"
@@ -77,7 +78,7 @@ func (r *DoHResolver) getShuffledProviders() []config.DoHProvider {
 	return shuffled
 }
 
-var createClientForProvider = func(provider config.DoHProvider) *http.Client {
+var createClientForProvider = func(provider config.DoHProvider) (*http.Client, error) {
 	dialer := &net.Dialer{
 		Timeout:   10 * time.Second,
 		KeepAlive: 10 * time.Second,
@@ -86,10 +87,12 @@ var createClientForProvider = func(provider config.DoHProvider) *http.Client {
 	tlsConfig := &tls.Config{ServerName: provider.ServerName}
 	if provider.RootCA != "" {
 		caCertPool := x509.NewCertPool()
-		// We can ignore the boolean return value. If the PEM data is invalid,
-		// AppendCertsFromPEM will just not add any certs to the pool, and we'll
-		// proceed with the system's default trust store.
-		caCertPool.AppendCertsFromPEM([]byte(provider.RootCA))
+		// FAIL-SAFE: If the provided RootCA is invalid, we MUST NOT proceed.
+		// A failure to append means the PEM data is malformed. Proceeding would
+		// bypass the intended certificate pinning, creating a security vulnerability.
+		if ok := caCertPool.AppendCertsFromPEM([]byte(provider.RootCA)); !ok {
+			return nil, fmt.Errorf("failed to parse provided RootCA for DoH provider '%s'", provider.Name)
+		}
 		tlsConfig.RootCAs = caCertPool
 	}
 
@@ -123,7 +126,7 @@ var createClientForProvider = func(provider config.DoHProvider) *http.Client {
 	return &http.Client{
 		Transport: transport,
 		Timeout:   10 * time.Second,
-	}
+	}, nil
 }
 
 // DoHResponse represents the JSON structure of a DoH response.
@@ -145,7 +148,13 @@ func (r *DoHResolver) Resolve(ctx context.Context, name string) (context.Context
 	var lastErr error
 
 	for _, provider := range shuffledProviders {
-		client := createClientForProvider(provider)
+		client, err := createClientForProvider(provider)
+		if err != nil {
+			// This provider is misconfigured (e.g., bad RootCA), log and skip.
+			lastErr = fmt.Errorf("could not create DoH client for provider %s: %w", provider.Name, err)
+			logging.GetLogger().Warn("Skipping misconfigured DoH provider", "provider", provider.Name, "error", err)
+			continue
+		}
 
 		reqURL, err := url.Parse(provider.URL)
 		if err != nil {

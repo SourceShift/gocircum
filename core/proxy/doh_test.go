@@ -72,14 +72,17 @@ func TestDoHResolver_Resolve_Failover(t *testing.T) {
 	// We can do this by modifying the createClientForProvider function for the test.
 	originalCreateClient := createClientForProvider
 	defer func() { createClientForProvider = originalCreateClient }()
-	createClientForProvider = func(provider config.DoHProvider) *http.Client {
-		client := originalCreateClient(provider)
+	createClientForProvider = func(provider config.DoHProvider) (*http.Client, error) {
+		client, err := originalCreateClient(provider)
+		if err != nil {
+			return nil, err
+		}
 		transport := client.Transport.(*http.Transport)
 		certpool := x509.NewCertPool()
 		certpool.AddCert(workingServer.Certificate())
 		certpool.AddCert(failingServer.Certificate())
 		transport.TLSClientConfig.RootCAs = certpool
-		return client
+		return client, nil
 	}
 
 	_, ip, err := resolver.Resolve(context.Background(), "example.com")
@@ -117,8 +120,11 @@ func TestDoHResolver_Resolve_AllFail(t *testing.T) {
 
 	originalCreateClient := createClientForProvider
 	defer func() { createClientForProvider = originalCreateClient }()
-	createClientForProvider = func(provider config.DoHProvider) *http.Client {
-		client := originalCreateClient(provider)
+	createClientForProvider = func(provider config.DoHProvider) (*http.Client, error) {
+		client, err := originalCreateClient(provider)
+		if err != nil {
+			return nil, err
+		}
 		transport := client.Transport.(*http.Transport)
 		certpool := x509.NewCertPool()
 		certpool.AddCert(failingServer1.Certificate())
@@ -126,7 +132,7 @@ func TestDoHResolver_Resolve_AllFail(t *testing.T) {
 		transport.TLSClientConfig.RootCAs = certpool
 		// Shorten timeout to make test run faster
 		client.Timeout = 200 * time.Millisecond
-		return client
+		return client, nil
 	}
 
 	_, _, err := resolver.Resolve(context.Background(), "example.com")
@@ -163,13 +169,16 @@ func TestDoHResolver_Resolve(t *testing.T) {
 
 		originalCreateClient := createClientForProvider
 		defer func() { createClientForProvider = originalCreateClient }()
-		createClientForProvider = func(provider config.DoHProvider) *http.Client {
-			client := originalCreateClient(provider)
+		createClientForProvider = func(provider config.DoHProvider) (*http.Client, error) {
+			client, err := originalCreateClient(provider)
+			if err != nil {
+				return nil, err
+			}
 			transport := client.Transport.(*http.Transport)
 			certpool := x509.NewCertPool()
 			certpool.AddCert(server.Certificate())
 			transport.TLSClientConfig.RootCAs = certpool
-			return client
+			return client, nil
 		}
 
 		_, ip, err := resolver.Resolve(context.Background(), "example.com")
@@ -203,13 +212,16 @@ func TestDoHResolver_Resolve(t *testing.T) {
 
 		originalCreateClient := createClientForProvider
 		defer func() { createClientForProvider = originalCreateClient }()
-		createClientForProvider = func(provider config.DoHProvider) *http.Client {
-			client := originalCreateClient(provider)
+		createClientForProvider = func(provider config.DoHProvider) (*http.Client, error) {
+			client, err := originalCreateClient(provider)
+			if err != nil {
+				return nil, err
+			}
 			transport := client.Transport.(*http.Transport)
 			certpool := x509.NewCertPool()
 			certpool.AddCert(server.Certificate())
 			transport.TLSClientConfig.RootCAs = certpool
-			return client
+			return client, nil
 		}
 
 		_, _, err := resolver.Resolve(context.Background(), "example.com")
@@ -234,7 +246,8 @@ func TestCreateClientForProvider_BootstrapFailover(t *testing.T) {
 		},
 	}
 
-	client := createClientForProvider(provider)
+	client, err := createClientForProvider(provider)
+	require.NoError(t, err)
 	transport := client.Transport.(*http.Transport)
 	certpool := x509.NewCertPool()
 	certpool.AddCert(workingServer.Certificate())
