@@ -76,6 +76,10 @@ func (f *Fingerprint) Validate() error {
 	}
 
 	// Add more validation for Transport and TLS fields
+	if err := f.TLS.Validate(); err != nil {
+		return fmt.Errorf("tls validation failed: %w", err)
+	}
+
 	return nil
 }
 
@@ -109,6 +113,26 @@ type TLS struct {
 	UTLSParrot      string        `yaml:"utls_parrot,omitempty"`
 	QUICNextProtos  []string      `yaml:"quic_next_protos,omitempty"`
 	QUICIdleTimeout time.Duration `yaml:"quic_idle_timeout,omitempty"`
+}
+
+// Validate enforces security policies on the TLS configuration.
+func (t *TLS) Validate() error {
+	// A TLS block might be empty in the config, in which case it's a no-op.
+	// We only validate if there are properties set.
+	// The dialer factory is responsible for enforcing TLS if the block is present.
+	if t.Library == "" && t.ClientHelloID == "" {
+		return nil // Nothing to validate
+	}
+
+	// Security Policy: The only permitted client-side library is 'utls' to
+	// prevent fingerprinting of the standard Go TLS implementation.
+	if t.Library != "utls" {
+		return fmt.Errorf("security policy violation: tls.library must be 'utls', but got '%s'", t.Library)
+	}
+	if t.ClientHelloID == "" {
+		return fmt.Errorf("security policy violation: tls.client_hello_id must be specified")
+	}
+	return nil
 }
 
 // DoHProvider holds the configuration for a single DNS-over-HTTPS provider.

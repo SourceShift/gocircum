@@ -405,8 +405,9 @@ func TestEngine_NewProxyForStrategy(t *testing.T) {
 			Protocol: "tcp",
 		},
 		TLS: config.TLS{
-			Library:    "utls",
-			ServerName: "example.com",
+			Library:       "utls",
+			ServerName:    "example.com",
+			ClientHelloID: "HelloChrome_Auto",
 		},
 	}
 	fileConfig := &config.FileConfig{

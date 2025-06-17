@@ -72,35 +72,44 @@ func (f *DefaultDialerFactory) NewDialer(transportCfg *config.Transport, tlsCfg 
 
 	rawDialer := baseDialer.DialContext
 
-	// If TLS is configured, wrap the raw dialer in a TLS handshake.
-	if tlsCfg != nil && tlsCfg.Library != "" {
-		var rootCAs *x509.CertPool
-		if f.GetRootCAs != nil {
-			rootCAs = f.GetRootCAs()
-		}
-
-		return func(ctx context.Context, network, address string) (net.Conn, error) {
-			rawConn, err := rawDialer(ctx, network, address)
-			if err != nil {
-				return nil, err
-			}
-
-			// The SNI should be the host part of the address, unless overridden in the config.
-			sni := tlsCfg.ServerName
-			if sni == "" {
-				host, _, err := net.SplitHostPort(address)
-				if err != nil {
-					sni = address // Fallback to address if SplitHostPort fails
-				} else {
-					sni = host
-				}
-			}
-
-			return NewUTLSClient(rawConn, tlsCfg, sni, rootCAs)
-		}, nil
+	// Hardened: Enforce TLS if the configuration block is present.
+	if tlsCfg == nil {
+		// No TLS configuration was provided at all, return raw dialer.
+		// Note: Higher-level logic should prevent this for circumvention strategies.
+		return rawDialer, nil
 	}
 
-	return rawDialer, nil
+	// If tlsCfg is not nil, we MUST establish a TLS connection.
+	// We rely on validation to have already checked the library.
+	if tlsCfg.Library == "" {
+		return nil, fmt.Errorf("security policy violation: TLS configuration is present but the 'library' field is empty. Must be 'utls'")
+	}
+
+	var rootCAs *x509.CertPool
+	if f.GetRootCAs != nil {
+		rootCAs = f.GetRootCAs()
+	}
+
+	return func(ctx context.Context, network, address string) (net.Conn, error) {
+		rawConn, err := rawDialer(ctx, network, address)
+		if err != nil {
+			return nil, err
+		}
+
+		// The SNI should be the host part of the address, unless overridden in the config.
+		sni := tlsCfg.ServerName
+		if sni == "" {
+			host, _, err := net.SplitHostPort(address)
+			if err != nil {
+				sni = address // Fallback to address if SplitHostPort fails
+			} else {
+				sni = host
+			}
+		}
+
+		// NewUTLSClient will handle the library check and handshake.
+		return NewUTLSClient(rawConn, tlsCfg, sni, rootCAs)
+	}, nil
 }
 
 func buildQUICUTLSConfig(cfg *config.TLS, rootCAs *x509.CertPool) (*utls.Config, error) {

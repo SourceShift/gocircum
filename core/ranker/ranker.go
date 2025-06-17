@@ -16,6 +16,14 @@ import (
 	"time"
 )
 
+var commonUserAgents = []string{
+	"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36",
+	"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36",
+	"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36",
+	"Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:107.0) Gecko/20100101 Firefox/107.0",
+	"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.1 Safari/605.1.15",
+}
+
 // DNSResolver defines the interface for a DNS resolver.
 type DNSResolver interface {
 	Resolve(ctx context.Context, name string) (context.Context, net.IP, error)
@@ -187,7 +195,9 @@ func (r *Ranker) testStrategy(ctx context.Context, fingerprint *config.Fingerpri
 
 	// Build the request with padding to obfuscate its size.
 	var requestBuilder strings.Builder
-	requestBuilder.WriteString(fmt.Sprintf("GET / HTTP/1.1\r\nHost: %s\r\nConnection: close\r\n", hostToResolve))
+	userAgentIndex, _ := engine.CryptoRandInt(0, len(commonUserAgents)-1)
+	userAgent := commonUserAgents[userAgentIndex]
+	requestBuilder.WriteString(fmt.Sprintf("GET / HTTP/1.1\r\nHost: %s\r\nConnection: close\r\nUser-Agent: %s\r\n", hostToResolve, userAgent))
 
 	paddingHeaders, _ := engine.CryptoRandInt(2, 5)
 	for i := 0; i < int(paddingHeaders); i++ {
