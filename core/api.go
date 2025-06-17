@@ -203,19 +203,35 @@ func (e *Engine) createDialerForStrategy(fp *config.Fingerprint) (proxy.CustomDi
 		return nil, fmt.Errorf("failed to create base dialer: %w", err)
 	}
 
-	// 2. Create the full dialer function that includes the TLS layer
+	// 2. Create the full dialer function that includes the TLS layer and secure resolution.
 	fullDialer := func(ctx context.Context, network, address string) (net.Conn, error) {
+		host, port, err := net.SplitHostPort(address)
+		if err != nil {
+			return nil, fmt.Errorf("invalid destination address for SOCKS proxy: %s", address)
+		}
+
 		if fp.DomainFronting != nil && fp.DomainFronting.Enabled {
 			e.logger.Info("Using domain fronting", "strategy", fp.ID, "front_domain", fp.DomainFronting.FrontDomain)
 
-			// For domain fronting, we dial the front domain. 'address' is the final destination.
-			dialAddr := fp.DomainFronting.FrontDomain
-			sni := fp.DomainFronting.FrontDomain
+			frontHost, frontPort, err := net.SplitHostPort(fp.DomainFronting.FrontDomain)
+			if err != nil {
+				// Assume default port 443 if not specified
+				frontHost = fp.DomainFronting.FrontDomain
+				frontPort = "443"
+			}
 
-			// 1. Dial the front domain
+			// SECURE RESOLUTION: Resolve the fronting domain using DoH.
+			_, frontIP, err := e.ranker.DoHResolver.Resolve(ctx, frontHost)
+			if err != nil {
+				return nil, fmt.Errorf("securely resolving front domain %s failed: %w", frontHost, err)
+			}
+			dialAddr := net.JoinHostPort(frontIP.String(), frontPort)
+			sni := frontHost // SNI remains the original hostname
+
+			// 1. Dial the front domain's IP address
 			rawConn, err := baseDialer(ctx, network, dialAddr)
 			if err != nil {
-				return nil, fmt.Errorf("base dialer failed for front domain %s: %w", dialAddr, err)
+				return nil, fmt.Errorf("base dialer failed for front domain %s (%s): %w", frontHost, dialAddr, err)
 			}
 
 			// 2. Establish TLS with SNI set to front domain
@@ -236,31 +252,29 @@ func (e *Engine) createDialerForStrategy(fp *config.Fingerprint) (proxy.CustomDi
 		}
 
 		// Original path for non-domain-fronting
-		host, _, err := net.SplitHostPort(address)
-		if err != nil {
-			// If SplitHostPort fails, it might be because the port is missing.
-			// In that case, the address is likely the host.
-			// We log a warning but proceed.
-			e.logger.Warn("Could not split host/port, using address as host for SNI", "address", address, "error", err)
-			host = address
-		}
+		e.logger.Debug("Direct connection path", "host", host, "port", port)
 
-		// WARNING: For direct connections without Domain Fronting, SNI is typically visible.
-		// The `serverName` passed to `NewTLSClient` becomes the SNI.
-		// For enhanced privacy, ensure ECH is enabled and configured if supported by the TLS library.
-		if !fp.TLS.ECHEnabled { // Add a check for ECH
+		// SECURE RESOLUTION: Resolve the target domain using DoH.
+		_, targetIP, err := e.ranker.DoHResolver.Resolve(ctx, host)
+		if err != nil {
+			return nil, fmt.Errorf("securely resolving target domain %s failed: %w", host, err)
+		}
+		dialAddr := net.JoinHostPort(targetIP.String(), port)
+
+		if !fp.TLS.ECHEnabled {
 			e.logger.Warn("Potential SNI leakage: Domain Fronting is not enabled and ECH is not configured for this strategy. SNI might be visible to censors.",
 				"strategy_id", fp.ID,
 				"target_host", host,
 			)
 		}
 
-		rawConn, err := baseDialer(ctx, network, address)
+		// Dial the resolved IP address
+		rawConn, err := baseDialer(ctx, network, dialAddr)
 		if err != nil {
-			return nil, fmt.Errorf("base dialer failed for %s: %w", address, err)
+			return nil, fmt.Errorf("base dialer failed for %s (%s): %w", host, dialAddr, err)
 		}
 
-		// Ensure TLS client is created with the correct server name for SNI
+		// Ensure TLS client is created with the original host for SNI, not the IP
 		tlsConn, err := engine.NewTLSClient(rawConn, &fp.TLS, host, nil)
 		if err != nil {
 			rawConn.Close()
@@ -272,7 +286,7 @@ func (e *Engine) createDialerForStrategy(fp *config.Fingerprint) (proxy.CustomDi
 	return fullDialer, nil
 }
 
-// GetBestStrategy tests all available strategies and returns the best one.
+// GetBestStrategy finds the best available strategy by testing and ranking them.
 func (e *Engine) GetBestStrategy(ctx context.Context) (*config.Fingerprint, error) {
 	e.logger.Info("Getting best strategy...")
 	// Convert to slice of pointers for the ranker
