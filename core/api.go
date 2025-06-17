@@ -238,18 +238,38 @@ func (e *Engine) NewTLSClient(rawConn net.Conn, tlsCfg *config.TLS, sni string, 
 	return engine.NewUTLSClient(rawConn, tlsCfg, sni, customRootCAs)
 }
 
-// createDomainFrontingDialer handles the secure connection logic for domain fronting.
+// Hardened: Implements a Resolve-then-Dial pattern to prevent DNS leaks.
 func (e *Engine) createDomainFrontingDialer(fp *config.Fingerprint, dialer engine.Dialer) engine.Dialer {
 	return func(ctx context.Context, network, address string) (net.Conn, error) {
-		// The `address` parameter from the SOCKS5 client is ignored;
-		// we always connect to the fronting domain.
-		rawConn, err := dialer(ctx, network, fp.DomainFronting.FrontDomain)
+		// The `address` from the SOCKS5 client is the final destination, used for the CONNECT tunnel.
+
+		// 1. Separate host and port from the fronting domain.
+		frontHost, frontPort, err := net.SplitHostPort(fp.DomainFronting.FrontDomain)
 		if err != nil {
-			return nil, fmt.Errorf("failed to dial front domain %s: %w", fp.DomainFronting.FrontDomain, err)
+			// If no port is specified, assume 443 for HTTPS.
+			frontHost = fp.DomainFronting.FrontDomain
+			frontPort = "443"
 		}
 
-		// Now, wrap the raw connection with TLS and send the CONNECT request.
-		tlsConn, err := engine.NewUTLSClient(rawConn, &fp.TLS, fp.DomainFronting.FrontDomain, nil)
+		// 2. CRITICAL: Resolve the fronting domain's hostname to an IP using our secure DoH resolver.
+		// We use the ranker's resolver as it's readily available and configured.
+		if e.ranker == nil || e.ranker.DoHResolver == nil {
+			return nil, fmt.Errorf("security policy violation: DoH resolver is not available for front domain resolution")
+		}
+		_, resolvedIP, err := e.ranker.DoHResolver.Resolve(ctx, frontHost)
+		if err != nil {
+			return nil, fmt.Errorf("DoH resolution for front domain %s failed: %w", frontHost, err)
+		}
+
+		// 3. Dial the resolved IP address, not the hostname. This prevents a system DNS lookup.
+		dialAddress := net.JoinHostPort(resolvedIP.String(), frontPort)
+		rawConn, err := dialer(ctx, network, dialAddress)
+		if err != nil {
+			return nil, fmt.Errorf("failed to dial front domain %s at %s: %w", fp.DomainFronting.FrontDomain, dialAddress, err)
+		}
+
+		// 4. Establish TLS, using the original hostname for SNI.
+		tlsConn, err := engine.NewUTLSClient(rawConn, &fp.TLS, frontHost, nil)
 		if err != nil {
 			rawConn.Close()
 			return nil, fmt.Errorf("failed to establish TLS with front domain: %w", err)
