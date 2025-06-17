@@ -3,7 +3,7 @@ doh_providers:
     url: "https://1.1.1.1/dns-query"
     server_name: "dns.cloudflare.com"
     bootstrap:
-      - "1.1.1.1:443"
+      - "1.1.1.1"
 
 canary_domains:
   - "www.example.com"

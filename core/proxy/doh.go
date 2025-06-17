@@ -99,8 +99,9 @@ func dialTLSWithUTLS(ctx context.Context, network, addr string, cfg *utls.Config
 			continue
 		}
 
-		// Use a common browser fingerprint for DoH requests.
-		uconn := utls.UClient(rawConn, cfg, utls.HelloChrome_Auto)
+		// Use a randomized fingerprint, but force HTTP/1.1 via ALPN from the config.
+		// This is to avoid protocol negotiation issues with some DoH servers.
+		uconn := utls.UClient(rawConn, cfg, utls.HelloRandomized)
 		if err := uconn.HandshakeContext(ctx); err != nil {
 			_ = rawConn.Close()
 			lastErr = fmt.Errorf("uTLS handshake with %s failed for DoH: %w", bootstrapTarget, err)
@@ -119,10 +120,12 @@ var createClientForProvider = func(provider config.DoHProvider) (*http.Client, e
 		sni = provider.FrontDomain
 	}
 
-	// Base uTLS config.
+	// Base uTLS config. To prevent protocol negotiation issues with some DoH
+	// servers, we explicitly force HTTP/1.1 by controlling the ALPN extension.
 	utlsConfig := &utls.Config{
 		ServerName:         sni,
 		InsecureSkipVerify: false, // Always verify certs.
+		NextProtos:         []string{"http/1.1"},
 	}
 	if provider.RootCA != "" {
 		caCertPool := x509.NewCertPool()
@@ -140,6 +143,9 @@ var createClientForProvider = func(provider config.DoHProvider) (*http.Client, e
 		},
 		// We are not setting TLSClientConfig or DialContext, as they are ignored
 		// by the transport when DialTLSContext is provided.
+		// By forcing HTTP/1.1 in the uTLS ALPN negotiation, we avoid HTTP/2 issues.
+		// `ForceAttemptHTTP2: false` is the default and is appropriate here.
+		ForceAttemptHTTP2: false,
 	}
 
 	return &http.Client{

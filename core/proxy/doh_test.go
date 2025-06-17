@@ -5,6 +5,7 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -66,20 +67,26 @@ func TestDoHResolver_Resolve_Failover(t *testing.T) {
 	// We create a PEM string containing both certs.
 	allCertsPEM := certToPEM(failingServer.Certificate()) + certToPEM(workingServer.Certificate())
 
+	workingHost, _, err := net.SplitHostPort(workingServer.Listener.Addr().String())
+	require.NoError(t, err)
+
+	failingHost, _, err := net.SplitHostPort(failingServer.Listener.Addr().String())
+	require.NoError(t, err)
+
 	// Override providers for test
 	resolver.providers = []config.DoHProvider{
 		{
 			Name:       "Failing",
 			URL:        failingServer.URL,
 			ServerName: "example.com",
-			Bootstrap:  []string{failingServer.Listener.Addr().String()},
+			Bootstrap:  []string{failingHost},
 			RootCA:     allCertsPEM,
 		},
 		{
 			Name:       "Working",
 			URL:        workingServer.URL,
 			ServerName: "example.com",
-			Bootstrap:  []string{workingServer.Listener.Addr().String()},
+			Bootstrap:  []string{workingHost},
 			RootCA:     allCertsPEM,
 		},
 	}
@@ -107,19 +114,24 @@ func TestDoHResolver_Resolve_AllFail(t *testing.T) {
 
 	allCertsPEM := certToPEM(failingServer1.Certificate()) + certToPEM(failingServer2.Certificate())
 
+	host1, _, err := net.SplitHostPort(failingServer1.Listener.Addr().String())
+	require.NoError(t, err)
+	host2, _, err := net.SplitHostPort(failingServer2.Listener.Addr().String())
+	require.NoError(t, err)
+
 	resolver.providers = []config.DoHProvider{
 		{
 			Name:       "Failing1",
 			URL:        failingServer1.URL,
 			ServerName: "example.com",
-			Bootstrap:  []string{failingServer1.Listener.Addr().String()},
+			Bootstrap:  []string{host1},
 			RootCA:     allCertsPEM,
 		},
 		{
 			Name:       "Failing2",
 			URL:        failingServer2.URL,
 			ServerName: "example.com",
-			Bootstrap:  []string{failingServer2.Listener.Addr().String()},
+			Bootstrap:  []string{host2},
 			RootCA:     allCertsPEM,
 		},
 	}
@@ -152,12 +164,15 @@ func TestDoHResolver_Resolve(t *testing.T) {
 		resolver, err := NewDoHResolver(dummyProviders)
 		require.NoError(t, err)
 
+		host, _, err := net.SplitHostPort(server.Listener.Addr().String())
+		require.NoError(t, err)
+
 		resolver.providers = []config.DoHProvider{
 			{
 				Name:       "TestServer",
 				URL:        server.URL + "/dns-query",
 				ServerName: "example.com",
-				Bootstrap:  []string{server.Listener.Addr().String()},
+				Bootstrap:  []string{host},
 				RootCA:     certToPEM(server.Certificate()),
 			},
 		}
@@ -185,12 +200,15 @@ func TestDoHResolver_Resolve(t *testing.T) {
 		resolver, err := NewDoHResolver(dummyProviders)
 		require.NoError(t, err)
 
+		host, _, err := net.SplitHostPort(server.Listener.Addr().String())
+		require.NoError(t, err)
+
 		resolver.providers = []config.DoHProvider{
 			{
 				Name:       "TestServer",
 				URL:        server.URL,
 				ServerName: "example.com",
-				Bootstrap:  []string{server.Listener.Addr().String()},
+				Bootstrap:  []string{host},
 				RootCA:     certToPEM(server.Certificate()),
 			},
 		}
@@ -207,13 +225,16 @@ func TestCreateClientForProvider_BootstrapFailover(t *testing.T) {
 	}))
 	defer workingServer.Close()
 
+	workingHost, _, err := net.SplitHostPort(workingServer.Listener.Addr().String())
+	require.NoError(t, err)
+
 	provider := config.DoHProvider{
 		Name:       "Test",
 		URL:        "https://example.com",
 		ServerName: "example.com",
 		Bootstrap: []string{
-			"127.0.0.1:12345", // Bad address
-			workingServer.Listener.Addr().String(),
+			"127.0.0.1", // Bad address, will fail to connect and cause failover
+			workingHost,
 		},
 		RootCA: certToPEM(workingServer.Certificate()),
 	}
