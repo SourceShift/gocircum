@@ -135,7 +135,7 @@ func (e *Engine) StartProxyWithStrategy(ctx context.Context, addr string, strate
 		return "", fmt.Errorf("could not create dialer for strategy %s: %w", strategy.ID, err)
 	}
 
-	p, err := proxy.New(addr, dialer)
+	p, err := proxy.New(addr, dialer, e.config.DoHProviders)
 	if err != nil {
 		return "", fmt.Errorf("failed to create socks5 server: %w", err)
 	}
