@@ -7,8 +7,8 @@
 [![Build Status](https://img.shields.io/github/actions/workflow/status/SourceShift/gocircum/main.yml?branch=main&style=for-the-badge)](https://github.com/SourceShift/gocircum/actions/workflows/main.yml)
 [![Go Report Card](https://img.shields.io/go/report-card/github.com/SourceShift/gocircum?style=for-the-badge)](https://goreportcard.com/report/github.com/SourceShift/gocircum)
 [![codecov](https://codecov.io/gh/SourceShift/gocircum/branch/main/graph/badge.svg?token=E6QKRQJHXY)](https://codecov.io/gh/SourceShift/gocircum)
-[![Latest Release](https://img.shields.io/github/v/release/SourceShift/gocircum?style=for-the-badge)](https://github.com/SourceShift/gocircum/releases)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=for-the-badge)](https://opensource.org/licenses/MIT)
+[![license](https://img.shields.io/github/license/SourceShift/gocircum)](https://github.com/SourceShift/gocircum/blob/master/LICENSE)
+[![GitHub Release](https://img.shields.io/github/v/release/SourceShift/gocircum?label=Release)](https://github.com/SourceShift/gocircum/releases)
 
 A modular and adaptable censorship circumvention framework designed for resilience against sophisticated network adversaries.
 
