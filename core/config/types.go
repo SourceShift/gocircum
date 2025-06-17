@@ -94,6 +94,7 @@ type Fragmentation struct {
 
 // TLS configures the TLS layer.
 type TLS struct {
+	ServerName      string         `yaml:"server_name,omitempty"`     // Explicitly set SNI, overrides defaults.
 	Library         string         `yaml:"library,omitempty"`         // go-stdlib, utls
 	ClientHelloID   string         `yaml:"client_hello_id,omitempty"` // e.g., "HelloChrome_102"
 	UserAgent       string         `yaml:"user_agent,omitempty"`

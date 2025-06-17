@@ -44,18 +44,21 @@ func (t *TCPTransport) DialContext(ctx context.Context, network, address string)
 	}
 
 	if t.tlsConfig != nil {
-		// We need to ensure the ServerName is set for SNI,
-		// which is crucial for TLS and circumvention.
-		host, _, err := net.SplitHostPort(address)
-		if err != nil {
-			// If SplitHostPort fails, it might be because the port is missing.
-			// In that case, the address itself is likely the host.
-			logging.GetLogger().Warn("could not split host/port, falling back to using address as host", "address", address, "error", err)
-			host = address
-		}
-
 		clientTLSConfig := t.tlsConfig.Clone()
+
+		// If the ServerName is not explicitly pre-configured, we derive it.
+		// This allows callers (like the ranker) to set the correct SNI (hostname)
+		// even when dialing an IP address.
 		if clientTLSConfig.ServerName == "" {
+			host, _, err := net.SplitHostPort(address)
+			if err != nil {
+				logging.GetLogger().Debug("could not split host/port, falling back to using address as host", "address", address, "error", err)
+				host = address
+			}
+			// Using an IP address as an SNI is a major fingerprint. We log a warning.
+			if net.ParseIP(host) != nil {
+				logging.GetLogger().Warn("SECURITY WARNING: Using an IP address for TLS SNI. This is highly fingerprintable.", "sni", host)
+			}
 			clientTLSConfig.ServerName = host
 		}
 

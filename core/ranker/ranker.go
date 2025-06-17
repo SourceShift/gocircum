@@ -146,7 +146,13 @@ func (r *Ranker) testStrategy(ctx context.Context, fingerprint *config.Fingerpri
 	// The address for the dialer must now be IP:port
 	addressToDial := resolvedIP.String() + ":443" // Assuming HTTPS default port
 
-	dialer, err := r.DialerFactory.NewDialer(&fingerprint.Transport, &fingerprint.TLS)
+	// CRITICAL FIX: Create a temporary TLS config for this test run and explicitly
+	// set the ServerName to the original domain. This prevents the transport
+	// from inferring a fingerprintable IP-based SNI.
+	tlsCfg := fingerprint.TLS // Creates a copy of the struct
+	tlsCfg.ServerName = domainToResolve
+
+	dialer, err := r.DialerFactory.NewDialer(&fingerprint.Transport, &tlsCfg)
 	if err != nil {
 		return false, 0, err
 	}
