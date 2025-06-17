@@ -33,3 +33,4 @@ tasks/
 .windsurfrules
 scripts
 repomix*
+coverage.out
