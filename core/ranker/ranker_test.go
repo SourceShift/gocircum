@@ -24,18 +24,40 @@ func (m *mockResolver) Resolve(ctx context.Context, name string) (context.Contex
 }
 
 // mockDialer simulates network dialing for tests.
-// It now checks if the address is the expected IP.
-func mockDialer(t *testing.T, ctrl *gomock.Controller, succeed bool, delay time.Duration, expectedAddr string) engine.Dialer {
+// It now checks if the address is the expected IP and simulates the HTTP exchange.
+func mockDialer(t *testing.T, ctrl *gomock.Controller, succeedDial bool, succeedHTTP bool, delay time.Duration, expectedAddr string) engine.Dialer {
 	return func(ctx context.Context, network, address string) (net.Conn, error) {
 		if address != expectedAddr {
 			t.Errorf("dialer called with wrong address: got %s, want %s", address, expectedAddr)
 			return nil, fmt.Errorf("unexpected address for dialer")
 		}
 
-		if succeed {
+		if succeedDial {
 			time.Sleep(delay)
 			conn := testutils.NewMockConn(ctrl)
+			conn.EXPECT().SetDeadline(gomock.Any()).Return(nil).AnyTimes()
 			conn.EXPECT().Close().Return(nil).AnyTimes()
+
+			if succeedHTTP {
+				// Expect Write to be called with a byte slice that is an HTTP GET request
+				conn.EXPECT().Write(gomock.Any()).DoAndReturn(func(b []byte) (int, error) {
+					return len(b), nil
+				})
+
+				// Expect Read to be called and return a valid HTTP response
+				httpResponse := []byte("HTTP/1.1 200 OK\r\n\r\nHello")
+				conn.EXPECT().Read(gomock.Any()).DoAndReturn(func(b []byte) (int, error) {
+					copy(b, httpResponse)
+					return len(httpResponse), nil
+				})
+			} else {
+				// Simulate a failure during the HTTP exchange
+				conn.EXPECT().Write(gomock.Any()).Return(0, fmt.Errorf("write error"))
+				// Read may or may not be called depending on where the error occurs.
+				// To make the test robust, we don't set an expectation for Read here,
+				// as the write failure should terminate the test for this strategy.
+			}
+
 			return conn, nil
 		}
 		return nil, &net.OpError{Op: "dial", Net: network, Addr: nil, Err: &net.DNSError{Err: "no such host"}}
@@ -52,12 +74,16 @@ func (f *mockDialerFactory) NewDialer(transportCfg *config.Transport, tlsCfg *co
 	expectedAddr := "1.2.3.4:443" // Based on mockResolver and default port.
 
 	switch tlsCfg.ClientHelloID {
-	case "fp1":
-		return mockDialer(f.t, f.ctrl, true, 50*time.Millisecond, expectedAddr), nil
-	case "fp2":
-		return mockDialer(f.t, f.ctrl, true, 150*time.Millisecond, expectedAddr), nil
-	default:
-		return mockDialer(f.t, f.ctrl, false, 0, expectedAddr), nil
+	case "fp1": // Succeeds fast
+		return mockDialer(f.t, f.ctrl, true, true, 50*time.Millisecond, expectedAddr), nil
+	case "fp2": // Succeeds slow
+		return mockDialer(f.t, f.ctrl, true, true, 150*time.Millisecond, expectedAddr), nil
+	case "fp3": // Fails to dial
+		return mockDialer(f.t, f.ctrl, false, false, 0, expectedAddr), nil
+	case "fp4": // Dials, but HTTP exchange fails
+		return mockDialer(f.t, f.ctrl, true, false, 20*time.Millisecond, expectedAddr), nil
+	default: // Fails to dial by default
+		return mockDialer(f.t, f.ctrl, false, false, 0, expectedAddr), nil
 	}
 }
 
@@ -79,7 +105,8 @@ func TestRanker_TestAndRank(t *testing.T) {
 	fingerprints := []*config.Fingerprint{
 		{ID: "fp1", TLS: config.TLS{ClientHelloID: "fp1"}}, // Should succeed fast
 		{ID: "fp2", TLS: config.TLS{ClientHelloID: "fp2"}}, // Should succeed slow
-		{ID: "fp3", TLS: config.TLS{ClientHelloID: "fp3"}}, // Should fail
+		{ID: "fp3", TLS: config.TLS{ClientHelloID: "fp3"}}, // Should fail dial
+		{ID: "fp4", TLS: config.TLS{ClientHelloID: "fp4"}}, // Should fail http
 	}
 
 	canaryDomains := []string{"www.example.com"} // Domain without port now
@@ -88,8 +115,26 @@ func TestRanker_TestAndRank(t *testing.T) {
 		t.Fatalf("TestAndRank failed: %v", err)
 	}
 
-	if len(results) != 3 {
-		t.Fatalf("Expected 3 results, got %d", len(results))
+	if len(results) != 4 {
+		t.Fatalf("Expected 4 results, got %d", len(results))
+	}
+
+	// Find fp3 and fp4 results to check their failure status
+	var fp3Result, fp4Result StrategyResult
+	foundFp3, foundFp4 := false, false
+	for _, res := range results {
+		if res.Fingerprint.ID == "fp3" {
+			fp3Result = res
+			foundFp3 = true
+		}
+		if res.Fingerprint.ID == "fp4" {
+			fp4Result = res
+			foundFp4 = true
+		}
+	}
+
+	if !foundFp3 || !foundFp4 {
+		t.Fatalf("Expected to find results for fp3 and fp4")
 	}
 
 	if !results[0].Success || results[0].Fingerprint.ID != "fp1" {
@@ -100,7 +145,11 @@ func TestRanker_TestAndRank(t *testing.T) {
 		t.Errorf("Expected fp2 to be the second best, but got %s (success: %v)", results[1].Fingerprint.ID, results[1].Success)
 	}
 
-	if results[2].Success || results[2].Fingerprint.ID != "fp3" {
-		t.Errorf("Expected fp3 to be the last and failed, but got %s (success: %v)", results[2].Fingerprint.ID, results[2].Success)
+	if fp3Result.Success {
+		t.Errorf("Expected fp3 to be a failed strategy, but it succeeded")
+	}
+
+	if fp4Result.Success {
+		t.Errorf("Expected fp4 to be a failed strategy, but it succeeded")
 	}
 }

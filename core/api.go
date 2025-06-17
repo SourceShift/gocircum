@@ -13,7 +13,9 @@ import (
 	"math/big"
 	"net"
 	"net/http"
+	"strings"
 	"sync"
+	"time"
 )
 
 var popularUserAgents = []string{
@@ -43,12 +45,18 @@ func NewEngine(cfg *config.FileConfig, logger logging.Logger) (*Engine, error) {
 	if logger == nil {
 		logger = logging.GetLogger()
 	}
-	ranker, err := ranker.NewRanker(logger, cfg.DoHProviders)
-	if err != nil {
-		return nil, fmt.Errorf("failed to initialize engine: %w", err)
+
+	var rankerInstance *ranker.Ranker
+	var err error
+	if len(cfg.DoHProviders) > 0 {
+		rankerInstance, err = ranker.NewRanker(logger, cfg.DoHProviders)
+		if err != nil {
+			return nil, fmt.Errorf("failed to initialize engine: %w", err)
+		}
 	}
+
 	return &Engine{
-		ranker:         ranker,
+		ranker:         rankerInstance,
 		config:         cfg,
 		proxyErrorChan: make(chan error, 1),
 		logger:         logger.With("component", "engine"),
@@ -116,6 +124,9 @@ func (e *Engine) Status() (string, error) {
 
 // TestStrategies tests all available fingerprints and returns the ranked results.
 func (e *Engine) TestStrategies(ctx context.Context) ([]ranker.StrategyResult, error) {
+	if e.ranker == nil {
+		return nil, fmt.Errorf("cannot test strategies: engine was initialized without DoH providers")
+	}
 	e.logger.Info("Testing all strategies...")
 	// Convert to slice of pointers for the ranker
 	var fps []*config.Fingerprint
@@ -184,7 +195,7 @@ func (e *Engine) StartProxyWithStrategy(ctx context.Context, addr string, strate
 	return p.Addr(), nil
 }
 
-// establishHTTPConnectTunnel sends an HTTP CONNECT request to establish a tunnel.
+// establishHTTPConnectTunnel sends a padded and fragmented HTTP CONNECT request to establish a tunnel.
 func establishHTTPConnectTunnel(conn net.Conn, covertTarget, finalDestination, userAgent string) error {
 	req, err := http.NewRequest("CONNECT", "http://"+finalDestination, nil)
 	if err != nil {
@@ -203,8 +214,41 @@ func establishHTTPConnectTunnel(conn net.Conn, covertTarget, finalDestination, u
 	}
 	req.Header.Set("User-Agent", userAgent)
 
-	if err := req.Write(conn); err != nil {
-		return fmt.Errorf("failed to write CONNECT request: %w", err)
+	// Add random padding headers to obfuscate the request size.
+	paddingHeaders, _ := engine.CryptoRandInt(2, 5)
+	for i := 0; i < int(paddingHeaders); i++ {
+		keyBytes := make([]byte, 8)
+		valBytes := make([]byte, 16)
+		_, _ = rand.Read(keyBytes)
+		_, _ = rand.Read(valBytes)
+		req.Header.Set(fmt.Sprintf("X-Padding-%x", keyBytes), fmt.Sprintf("%x", valBytes))
+	}
+
+	// Convert the request to bytes to be sent manually.
+	var buf strings.Builder
+	if err := req.Write(&buf); err != nil {
+		return fmt.Errorf("failed to buffer CONNECT request: %w", err)
+	}
+	requestBytes := []byte(buf.String())
+
+	// Fragment the request write to break the packet fingerprint.
+	offset := 0
+	for offset < len(requestBytes) {
+		maxChunk, _ := engine.CryptoRandInt(10, 50)
+		chunkSize := int(maxChunk)
+		if offset+chunkSize > len(requestBytes) {
+			chunkSize = len(requestBytes) - offset
+		}
+
+		if _, err := conn.Write(requestBytes[offset : offset+chunkSize]); err != nil {
+			return fmt.Errorf("failed to write fragmented CONNECT request: %w", err)
+		}
+		offset += chunkSize
+
+		if offset < len(requestBytes) {
+			delay, _ := engine.CryptoRandInt(5, 20)
+			time.Sleep(time.Duration(delay) * time.Millisecond)
+		}
 	}
 
 	resp, err := http.ReadResponse(bufio.NewReader(conn), req)
@@ -249,10 +293,10 @@ func (e *Engine) createDomainFrontingDialer(fp *config.Fingerprint, baseDialer e
 			return nil, fmt.Errorf("tls client creation failed for front domain: %w", err)
 		}
 
-		// 3. Establish HTTP CONNECT tunnel to the actual destination.
+		// 3. Establish a CONNECT tunnel to the final destination through the fronted connection.
 		if err := establishHTTPConnectTunnel(tlsConn, fp.DomainFronting.CovertTarget, finalDestination, fp.TLS.UserAgent); err != nil {
 			tlsConn.Close()
-			return nil, fmt.Errorf("http connect tunnel failed for %s: %w", finalDestination, err)
+			return nil, fmt.Errorf("http connect tunnel failed: %w", err)
 		}
 
 		e.logger.Info("Domain fronting tunnel established", "final_destination", finalDestination)
@@ -266,32 +310,33 @@ func (e *Engine) createDomainFrontingDialer(fp *config.Fingerprint, baseDialer e
 // like the domain fronting dialer.
 
 func (e *Engine) createDialerForStrategy(fp *config.Fingerprint) (proxy.CustomDialer, error) {
-	factory := &engine.DefaultDialerFactory{}
-	baseDialer, err := factory.NewDialer(&fp.Transport, &fp.TLS)
+	// 1. Create the base dialer (TCP or QUIC) without domain fronting logic.
+	dialerFactory := &engine.DefaultDialerFactory{}
+	baseDialer, err := dialerFactory.NewDialer(&fp.Transport, &fp.TLS)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create base dialer: %w", err)
 	}
 
-	// Enforce secure-by-default: only domain fronting is allowed.
+	// 2. If domain fronting is enabled, wrap the base dialer.
 	if fp.DomainFronting != nil && fp.DomainFronting.Enabled {
-		e.logger.Info("Creating dialer with Domain Fronting strategy.", "strategy_id", fp.ID)
 		return e.createDomainFrontingDialer(fp, baseDialer)
 	}
 
-	// Reject any strategy that does not explicitly enable domain fronting.
-	// This prevents accidental use of insecure direct connections.
-	return nil, fmt.Errorf("security policy violation: strategy '%s' must have domain_fronting enabled. Direct connections with SNI leakage are not permitted", fp.ID)
+	// 3. If no domain fronting, the dialer connects directly.
+	// This path is now strongly discouraged due to fingerprinting risks.
+	return func(ctx context.Context, network, addr string) (net.Conn, error) {
+		e.logger.Warn("SECURITY WARNING: Using a strategy without domain fronting. This is highly fingerprintable and not recommended.", "strategy_id", fp.ID)
+		return baseDialer(ctx, network, addr)
+	}, nil
 }
 
 // GetBestStrategy finds the best available strategy by testing and ranking them.
 func (e *Engine) GetBestStrategy(ctx context.Context) (*config.Fingerprint, error) {
-	e.logger.Info("Getting best strategy...")
-	// Convert to slice of pointers for the ranker
-	var fps []*config.Fingerprint
-	for i := range e.config.Fingerprints {
-		fps = append(fps, &e.config.Fingerprints[i])
+	if e.ranker == nil {
+		return nil, fmt.Errorf("cannot get best strategy: engine was initialized without DoH providers")
 	}
-	results, err := e.ranker.TestAndRank(ctx, fps, e.config.CanaryDomains)
+	e.logger.Info("Getting best strategy...")
+	results, err := e.TestStrategies(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to test and rank strategies: %w", err)
 	}

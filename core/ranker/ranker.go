@@ -3,6 +3,7 @@ package ranker
 import (
 	"container/list"
 	"context"
+	"crypto/rand"
 	"fmt"
 	"gocircum/core/config"
 	"gocircum/core/engine"
@@ -10,6 +11,7 @@ import (
 	"gocircum/pkg/logging"
 	"net"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 )
@@ -123,7 +125,7 @@ func (r *Ranker) TestAndRank(ctx context.Context, fingerprints []*config.Fingerp
 	return rankedResults, nil
 }
 
-// testStrategy performs a single connection test.
+// testStrategy performs a single connection test, including an application-layer data exchange.
 func (r *Ranker) testStrategy(ctx context.Context, fingerprint *config.Fingerprint, canaryDomains []string) (bool, time.Duration, error) {
 	if len(canaryDomains) == 0 {
 		return false, 0, fmt.Errorf("no canary domains provided")
@@ -133,35 +135,41 @@ func (r *Ranker) testStrategy(ctx context.Context, fingerprint *config.Fingerpri
 	if err != nil {
 		return false, 0, fmt.Errorf("failed to select random canary domain: %w", err)
 	}
-	domainToResolve := canaryDomains[domainIndex]
-
-	// Use the DoHResolver to resolve the canary domain securely.
-	// This prevents system DNS leakage.
-	_, resolvedIP, err := r.DoHResolver.Resolve(ctx, domainToResolve)
+	domainToTest := canaryDomains[domainIndex]
+	hostToResolve, port, err := net.SplitHostPort(domainToTest)
 	if err != nil {
-		r.Logger.Warn("Failed to securely resolve canary domain for testing", "domain", domainToResolve, "error", err)
-		return false, 0, fmt.Errorf("failed to securely resolve canary domain '%s': %w", domainToResolve, err)
+		// If there's an error, it's likely because there was no port.
+		hostToResolve = domainToTest
+		port = "443" // Default to HTTPS port
 	}
 
-	// The address for the dialer must now be IP:port
-	addressToDial := resolvedIP.String() + ":443" // Assuming HTTPS default port
+	var resolvedIP net.IP
+	// If the host is already an IP, no need to resolve it.
+	parsedIP := net.ParseIP(hostToResolve)
+	if parsedIP != nil {
+		resolvedIP = parsedIP
+	} else {
+		// Use the DoHResolver to resolve the canary domain securely.
+		_, resolvedIP, err = r.DoHResolver.Resolve(ctx, hostToResolve)
+		if err != nil {
+			r.Logger.Warn("Failed to securely resolve canary domain for testing", "domain", hostToResolve, "error", err)
+			return false, 0, fmt.Errorf("failed to securely resolve canary domain '%s': %w", hostToResolve, err)
+		}
+	}
 
-	// CRITICAL FIX: Create a temporary TLS config for this test run and explicitly
-	// set the ServerName to the original domain. This prevents the transport
-	// from inferring a fingerprintable IP-based SNI.
-	tlsCfg := fingerprint.TLS // Creates a copy of the struct
-	tlsCfg.ServerName = domainToResolve
+	addressToDial := net.JoinHostPort(resolvedIP.String(), port)
+
+	tlsCfg := fingerprint.TLS
+	tlsCfg.ServerName = hostToResolve
 
 	dialer, err := r.DialerFactory.NewDialer(&fingerprint.Transport, &tlsCfg)
 	if err != nil {
 		return false, 0, err
 	}
 
-	// Add cryptographically secure random jitter to break timing patterns
 	jitterMs, err := engine.CryptoRandInt(50, 250)
 	if err != nil {
 		r.Logger.Error("failed to generate secure jitter", "error", err)
-		// Fallback to a static jitter, but this should not happen.
 		jitterMs = 100
 	}
 	time.Sleep(time.Duration(jitterMs) * time.Millisecond)
@@ -174,6 +182,58 @@ func (r *Ranker) testStrategy(ctx context.Context, fingerprint *config.Fingerpri
 	defer conn.Close()
 	latency := time.Since(start)
 
-	// Could add a simple echo test here for verification
+	// HARDENED LIVENESS CHECK: Perform a padded and fragmented HTTP GET to verify application data flow.
+	_ = conn.SetDeadline(time.Now().Add(10 * time.Second)) // Set a deadline for the exchange.
+
+	// Build the request with padding to obfuscate its size.
+	var requestBuilder strings.Builder
+	requestBuilder.WriteString(fmt.Sprintf("GET / HTTP/1.1\r\nHost: %s\r\nConnection: close\r\n", hostToResolve))
+
+	paddingHeaders, _ := engine.CryptoRandInt(2, 5)
+	for i := 0; i < int(paddingHeaders); i++ {
+		keyBytes := make([]byte, 8)
+		valBytes := make([]byte, 16)
+		_, _ = rand.Read(keyBytes)
+		_, _ = rand.Read(valBytes)
+		requestBuilder.WriteString(fmt.Sprintf("X-Padding-%x: %x\r\n", keyBytes, valBytes))
+	}
+	requestBuilder.WriteString("\r\n")
+
+	requestBytes := []byte(requestBuilder.String())
+
+	// Fragment the request write to break the single-packet fingerprint.
+	offset := 0
+	for offset < len(requestBytes) {
+		// Determine chunk size dynamically to further obfuscate the pattern.
+		maxChunk, _ := engine.CryptoRandInt(20, 60)
+		chunkSize := int(maxChunk)
+		if offset+chunkSize > len(requestBytes) {
+			chunkSize = len(requestBytes) - offset
+		}
+
+		if _, err := conn.Write(requestBytes[offset : offset+chunkSize]); err != nil {
+			return false, 0, fmt.Errorf("failed to write fragmented GET to canary: %w", err)
+		}
+		offset += chunkSize
+
+		// Add a small, random delay between fragments.
+		if offset < len(requestBytes) {
+			delay, _ := engine.CryptoRandInt(10, 30)
+			time.Sleep(time.Duration(delay) * time.Millisecond)
+		}
+	}
+
+	// Read the first line of the response to check for a valid HTTP status.
+	responseBytes := make([]byte, 1024)
+	n, err := conn.Read(responseBytes)
+	if err != nil {
+		return false, 0, fmt.Errorf("failed to read response from canary: %w", err)
+	}
+
+	response := string(responseBytes[:n])
+	if !strings.HasPrefix(response, "HTTP/1.") {
+		return false, 0, fmt.Errorf("invalid HTTP response from canary: %s", response)
+	}
+
 	return true, latency, nil
 }

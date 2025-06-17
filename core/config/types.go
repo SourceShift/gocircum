@@ -94,20 +94,21 @@ type Fragmentation struct {
 
 // TLS configures the TLS layer.
 type TLS struct {
-	ServerName      string         `yaml:"server_name,omitempty"`     // Explicitly set SNI, overrides defaults.
-	Library         string         `yaml:"library,omitempty"`         // go-stdlib, utls
-	ClientHelloID   string         `yaml:"client_hello_id,omitempty"` // e.g., "HelloChrome_102"
-	UserAgent       string         `yaml:"user_agent,omitempty"`
-	RootCAs         *x509.CertPool `yaml:"-"`                     // This will not be marshalled from/to YAML.
-	MinVersion      string         `yaml:"min_version,omitempty"` // e.g., "1.2"
-	MaxVersion      string         `yaml:"max_version,omitempty"` // e.g., "1.3"
-	CipherSuites    []string       `yaml:"cipher_suites,omitempty"`
-	ALPN            []string       `yaml:"alpn,omitempty"`
-	ECHEnabled      bool           `yaml:"ech_enabled,omitempty"`
-	ECHConfig       string         `yaml:"ech_config,omitempty"`
-	UTLSParrot      string         `yaml:"utls_parrot,omitempty"`
-	QUICNextProtos  []string       `yaml:"quic_next_protos,omitempty"`
-	QUICIdleTimeout time.Duration  `yaml:"quic_idle_timeout,omitempty"`
+	ServerName         string         `yaml:"server_name,omitempty"`     // Explicitly set SNI, overrides defaults.
+	Library            string         `yaml:"library,omitempty"`         // go-stdlib, utls
+	ClientHelloID      string         `yaml:"client_hello_id,omitempty"` // e.g., "HelloChrome_102"
+	UserAgent          string         `yaml:"user_agent,omitempty"`
+	RootCAs            *x509.CertPool `yaml:"-"` // This will not be marshalled from/to YAML.
+	InsecureSkipVerify bool           `yaml:"insecure_skip_verify,omitempty"`
+	MinVersion         string         `yaml:"min_version,omitempty"` // e.g., "1.2"
+	MaxVersion         string         `yaml:"max_version,omitempty"` // e.g., "1.3"
+	CipherSuites       []string       `yaml:"cipher_suites,omitempty"`
+	ALPN               []string       `yaml:"alpn,omitempty"`
+	ECHEnabled         bool           `yaml:"ech_enabled,omitempty"`
+	ECHConfig          string         `yaml:"ech_config,omitempty"`
+	UTLSParrot         string         `yaml:"utls_parrot,omitempty"`
+	QUICNextProtos     []string       `yaml:"quic_next_protos,omitempty"`
+	QUICIdleTimeout    time.Duration  `yaml:"quic_idle_timeout,omitempty"`
 }
 
 // DoHProvider holds the configuration for a single DNS-over-HTTPS provider.

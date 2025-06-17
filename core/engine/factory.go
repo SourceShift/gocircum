@@ -10,6 +10,8 @@ import (
 	"net"
 	"time"
 
+	"crypto/tls"
+
 	utls "github.com/refraction-networking/utls"
 )
 
@@ -30,11 +32,17 @@ type DefaultDialerFactory struct{}
 // It returns a function that can be used to establish a connection.
 func (f *DefaultDialerFactory) NewDialer(transportCfg *config.Transport, tlsCfg *config.TLS) (Dialer, error) {
 	var dialer transport.Transport
-	var err error
 
 	switch transportCfg.Protocol {
 	case "tcp":
-		dialer, err = transport.NewTCPTransport(&transport.TCPConfig{})
+		stdLibTlsConfig, err := buildStdLibTLSConfig(tlsCfg)
+		if err != nil {
+			return nil, fmt.Errorf("failed to build stdlib tls config: %w", err)
+		}
+
+		dialer, err = transport.NewTCPTransport(&transport.TCPConfig{
+			TLSConfig: stdLibTlsConfig,
+		})
 		if err != nil {
 			return nil, fmt.Errorf("failed to create TCP transport: %w", err)
 		}
@@ -62,6 +70,13 @@ func (f *DefaultDialerFactory) NewDialer(transportCfg *config.Transport, tlsCfg 
 	return dialer.DialContext, nil
 }
 
+func buildStdLibTLSConfig(cfg *config.TLS) (*tls.Config, error) {
+	return &tls.Config{
+		ServerName:         cfg.ServerName,
+		InsecureSkipVerify: cfg.InsecureSkipVerify,
+	}, nil
+}
+
 func buildQUICUTLSConfig(cfg *config.TLS) (*utls.Config, error) {
 	minVersion, ok := constants.TLSVersionMap[cfg.MinVersion]
 	if !ok {
@@ -73,7 +88,7 @@ func buildQUICUTLSConfig(cfg *config.TLS) (*utls.Config, error) {
 	}
 
 	return &utls.Config{
-		InsecureSkipVerify: false,
+		InsecureSkipVerify: cfg.InsecureSkipVerify,
 		MinVersion:         minVersion,
 		MaxVersion:         maxVersion,
 	}, nil
