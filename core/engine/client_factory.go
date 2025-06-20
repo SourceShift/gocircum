@@ -71,9 +71,11 @@ func buildUTLSConfig(serverName string, cfg *config.TLS, rootCAs *x509.CertPool)
 		return nil, fmt.Errorf("unknown max TLS version: %s", cfg.MaxVersion)
 	}
 
+	// The `InsecureSkipVerify` field is explicitly and immutably set to false.
+	// It does not read from any configuration struct, enforcing security at compile time.
 	return &utls.Config{
 		ServerName:         serverName,
-		InsecureSkipVerify: false,
+		InsecureSkipVerify: false, // This is a security policy, not a configuration option.
 		RootCAs:            rootCAs,
 		MinVersion:         minVersion,
 		MaxVersion:         maxVersion,

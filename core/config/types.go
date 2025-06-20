@@ -103,7 +103,7 @@ type TLS struct {
 	UserAgent     string         `yaml:"user_agent,omitempty"`
 	ServerName    string         `yaml:"server_name,omitempty"`
 	RootCAs       *x509.CertPool `yaml:"-"` // This will not be marshalled from/to YAML.
-	// InsecureSkipVerify has been removed. Certificate verification must never be disabled.
+	// NOTE: InsecureSkipVerify is intentionally omitted. It must never be configurable.
 	MinVersion      string        `yaml:"min_version,omitempty"` // e.g., "1.2"
 	MaxVersion      string        `yaml:"max_version,omitempty"` // e.g., "1.3"
 	CipherSuites    []string      `yaml:"cipher_suites,omitempty"`

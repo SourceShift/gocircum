@@ -37,6 +37,11 @@ type DefaultDialerFactory struct {
 	GetRootCAs func() *x509.CertPool
 }
 
+// NewDefaultDialerFactory creates a new DefaultDialerFactory.
+func NewDefaultDialerFactory(getRootCAs func() *x509.CertPool) DialerFactory {
+	return &DefaultDialerFactory{GetRootCAs: getRootCAs}
+}
+
 // NewDialer creates a new network dialer based on the transport configuration.
 // It returns a function that can be used to establish a connection.
 func (f *DefaultDialerFactory) NewDialer(transportCfg *config.Transport, tlsCfg *config.TLS) (Dialer, error) {
@@ -132,8 +137,10 @@ func buildQUICUTLSConfig(cfg *config.TLS, rootCAs *x509.CertPool) (*utls.Config,
 		maxVersion = utls.VersionTLS13
 	}
 
+	// The `InsecureSkipVerify` field is explicitly and immutably set to false.
+	// It does not read from any configuration struct, enforcing security at compile time.
 	return &utls.Config{
-		InsecureSkipVerify: false,
+		InsecureSkipVerify: false, // This is a security policy, not a configuration option.
 		MinVersion:         minVersion,
 		MaxVersion:         maxVersion,
 		RootCAs:            rootCAs,
@@ -159,9 +166,11 @@ func BuildUTLSConfig(cfg *config.TLS, rootCAs *x509.CertPool) (*utls.Config, err
 		maxVersion = utls.VersionTLS13
 	}
 
+	// The `InsecureSkipVerify` field is explicitly and immutably set to false.
+	// It does not read from any configuration struct, enforcing security at compile time.
 	return &utls.Config{
 		ServerName:         cfg.ServerName,
-		InsecureSkipVerify: false,
+		InsecureSkipVerify: false, // This is a security policy, not a configuration option.
 		MinVersion:         minVersion,
 		MaxVersion:         maxVersion,
 		RootCAs:            rootCAs,
