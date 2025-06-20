@@ -77,7 +77,7 @@ func newTCPListenerWrapper(ctx context.Context, l net.Listener) *tcpListenerWrap
 	go func() {
 		<-ctx.Done()
 		// Closing the listener will cause the blocking Accept() call to return an error.
-		_ = lw.Listener.Close()
+		_ = lw.Close()
 	}()
 
 	return lw

@@ -143,6 +143,6 @@ func (c *quicConn) RemoteAddr() net.Addr {
 }
 
 func (c *quicConn) SetDeadline(t time.Time) error {
-	_ = c.Stream.SetReadDeadline(t)
-	return c.Stream.SetWriteDeadline(t)
+	_ = c.SetReadDeadline(t)
+	return c.SetWriteDeadline(t)
 }
