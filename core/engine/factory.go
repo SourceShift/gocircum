@@ -250,67 +250,68 @@ func (c *fragmentingConn) Write(b []byte) (n int, err error) {
 	c.wrotePacket = true
 
 	switch c.cfg.Algorithm {
+	case "static":
+		return c.writeStatic(b)
 	case "even":
 		return c.writeEven(b)
-	case "static", "": // Default to static
-		return c.writeStatic(b)
 	default:
-		c.logError(fmt.Errorf("unknown fragmentation algorithm: %s", c.cfg.Algorithm), "unknown fragmentation algorithm, falling back to static")
+		// Default to static distribution if the type is unknown or not specified.
 		return c.writeStatic(b)
 	}
 }
 
-// writeStatic fragments the data based on the static ranges defined in the config.
+// writeStatic fragments the ClientHello into chunks of predetermined sizes.
 func (c *fragmentingConn) writeStatic(b []byte) (n int, err error) {
 	totalSent := 0
-	for i, sizeRange := range c.cfg.PacketSizes {
-		if len(b) == 0 {
+	remaining := len(b)
+	packetSizes := c.cfg.PacketSizes
+	delayRange := c.cfg.DelayMs
+
+	for i, sizeRange := range packetSizes {
+		if remaining == 0 {
 			break
 		}
 
-		minSize, maxSize := sizeRange[0], sizeRange[1]
-		chunkSize := minSize
-		if maxSize > minSize {
-			secureRand, err := CryptoRandInt(minSize, maxSize)
-			if err != nil {
-				c.logError(err, "failed to generate secure random number for chunk size")
-				return totalSent, err
-			}
-			chunkSize = secureRand
-		}
+		minChunk := sizeRange[0]
+		maxChunk := sizeRange[1]
 
-		if chunkSize > len(b) {
-			chunkSize = len(b)
-		}
-
-		sent, err := c.Conn.Write(b[:chunkSize])
+		var chunkSize int
+		// HARDENED: Fail the connection if we cannot generate a secure random number.
+		chunkSize, err = CryptoRandInt(minChunk, maxChunk)
 		if err != nil {
-			return totalSent + sent, fmt.Errorf("fragmented write failed: %w", err)
+			c.logError(err, "fatal: cannot generate secure random number for chunk size")
+			return totalSent, fmt.Errorf("CSPRNG failure for fragmentation: %w", err)
+		}
+
+		if chunkSize > remaining {
+			chunkSize = remaining
+		}
+
+		sent, writeErr := c.Conn.Write(b[totalSent : totalSent+chunkSize])
+		if writeErr != nil {
+			return totalSent, writeErr
 		}
 		totalSent += sent
-		b = b[sent:]
+		remaining -= sent
 
-		// Apply delay if there's more data to send
-		if len(b) > 0 && i < len(c.cfg.PacketSizes)-1 {
-			minDelay, maxDelay := c.cfg.DelayMs[0], c.cfg.DelayMs[1]
-			delayMs := minDelay
-			if maxDelay > minDelay {
-				secureRand, err := CryptoRandInt(minDelay, maxDelay)
-				if err != nil {
-					c.logError(err, "failed to generate secure random number for delay")
-					return totalSent, err
-				}
-				delayMs = secureRand
+		isLastChunk := (i == len(packetSizes)-1) || (remaining == 0)
+		if !isLastChunk {
+			var delayMs int
+			// HARDENED: Fail the connection if we cannot generate a secure random number.
+			delayMs, err = CryptoRandInt(delayRange[0], delayRange[1])
+			if err != nil {
+				c.logError(err, "fatal: cannot generate secure random number for delay")
+				return totalSent, fmt.Errorf("CSPRNG failure for fragmentation delay: %w", err)
 			}
 			time.Sleep(time.Duration(delayMs) * time.Millisecond)
 		}
 	}
 
-	// Send any remaining data in one go
-	if len(b) > 0 {
-		sent, err := c.Conn.Write(b)
-		if err != nil {
-			return totalSent + sent, fmt.Errorf("final fragmented write failed: %w", err)
+	// If there's any data left over, send it in one last chunk.
+	if remaining > 0 {
+		sent, writeErr := c.Conn.Write(b[totalSent:])
+		if writeErr != nil {
+			return totalSent, writeErr
 		}
 		totalSent += sent
 	}
@@ -318,67 +319,71 @@ func (c *fragmentingConn) writeStatic(b []byte) (n int, err error) {
 	return totalSent, nil
 }
 
-// writeEven splits the data into a specified number of even-sized chunks.
-// The number of chunks is taken from the first PacketSizes entry.
+// writeEven fragments the ClientHello into chunks of random sizes within a configured range.
+// The number of chunks is not fixed; instead, we send random-sized chunks until the
+// entire payload is sent. This is more robust against fingerprinting than a fixed number of chunks.
 func (c *fragmentingConn) writeEven(b []byte) (n int, err error) {
-	if len(c.cfg.PacketSizes) == 0 || c.cfg.PacketSizes[0][0] <= 0 {
-		c.logError(fmt.Errorf("invalid number of chunks for 'even' algorithm"), "invalid config for 'even' fragmentation")
-		return c.Conn.Write(b) // Fallback to no fragmentation
-	}
-	numChunks := c.cfg.PacketSizes[0][0]
-	if numChunks == 1 {
-		return c.Conn.Write(b)
-	}
-
-	chunkSize := len(b) / numChunks
-	if chunkSize == 0 {
-		chunkSize = 1 // Avoid infinite loop for small payloads
-	}
-
 	totalSent := 0
-	for len(b) > 0 {
-		currentChunkSize := chunkSize
-		if currentChunkSize > len(b) {
-			currentChunkSize = len(b)
-		}
+	remaining := len(b)
 
-		// To make it slightly less predictable, we can add a small random variation to chunk size
-		if len(b) > currentChunkSize { // Don't randomize the last chunk
-			variation, _ := CryptoRandInt(0, chunkSize/5)
-			currentChunkSize += (variation - chunkSize/10)
-			if currentChunkSize <= 0 {
-				currentChunkSize = 1
-			}
-		}
+	if len(c.cfg.PacketSizes) == 0 {
+		return 0, fmt.Errorf("fragmentation config for 'even' algorithm is missing packet_sizes")
+	}
+	// For 'even' distribution, we use the first entry in PacketSizes for min/max chunk size.
+	minSize := c.cfg.PacketSizes[0][0]
+	maxSize := c.cfg.PacketSizes[0][1]
 
-		sent, err := c.Conn.Write(b[:currentChunkSize])
+	// And DelayMs for min/max delay.
+	minDelay := c.cfg.DelayMs[0]
+	maxDelay := c.cfg.DelayMs[1]
+
+	for remaining > 0 {
+		var chunkSize int
+		// HARDENED: Fail the connection if we cannot generate a secure random number.
+		// Continuing with a predictable default would create a fingerprint.
+		chunkSize, err := CryptoRandInt(minSize, maxSize)
 		if err != nil {
-			return totalSent + sent, fmt.Errorf("fragmented write failed: %w", err)
+			c.logError(err, "fatal: cannot generate secure random number for chunk size")
+			// Return an error to abort the Write and the connection attempt.
+			return totalSent, fmt.Errorf("CSPRNG failure for fragmentation: %w", err)
 		}
-		totalSent += sent
-		b = b[sent:]
 
-		if len(b) > 0 {
-			minDelay, maxDelay := c.cfg.DelayMs[0], c.cfg.DelayMs[1]
-			delayMs := minDelay
-			if maxDelay > minDelay {
-				secureRand, err := CryptoRandInt(minDelay, maxDelay)
-				if err != nil {
-					c.logError(err, "failed to generate secure random number for delay")
-					return totalSent, err
-				}
-				delayMs = secureRand
+		if chunkSize > remaining {
+			chunkSize = remaining
+		}
+		// Ensure we always make progress and don't get stuck in a loop.
+		if chunkSize <= 0 && remaining > 0 {
+			chunkSize = remaining
+		}
+
+		sent, err := c.Conn.Write(b[totalSent : totalSent+chunkSize])
+		if err != nil {
+			return totalSent, err
+		}
+
+		totalSent += sent
+		remaining -= sent
+
+		if remaining > 0 {
+			var delayMs int
+			// HARDENED: Fail the connection if we cannot generate a secure random number.
+			delayMs, err := CryptoRandInt(minDelay, maxDelay)
+			if err != nil {
+				c.logError(err, "fatal: cannot generate secure random number for delay")
+				// Return an error to abort the Write and the connection attempt.
+				return totalSent, fmt.Errorf("CSPRNG failure for fragmentation delay: %w", err)
 			}
+
 			time.Sleep(time.Duration(delayMs) * time.Millisecond)
 		}
 	}
-
 	return totalSent, nil
 }
 
 func (c *fragmentingConn) logError(err error, msg string) {
+	logger := logging.GetLogger()
 	// A basic logger that prints to stderr.
 	// In a real application, this would use the configured logger.
 	// For now, we avoid adding a logger field to fragmentingConn to minimize changes.
-	logging.GetLogger().Error(msg, "error", err)
+	logger.Error(msg, "error", err)
 }
