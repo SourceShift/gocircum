@@ -110,16 +110,14 @@ func (f *DefaultDialerFactory) NewDialer(transportCfg *config.Transport, tlsCfg 
 			return nil, err
 		}
 
-		// The SNI should be the host part of the address, unless overridden in the config.
-		sni := tlsCfg.ServerName
-		if sni == "" {
-			host, _, err := net.SplitHostPort(address)
-			if err != nil {
-				sni = address // Fallback to address if SplitHostPort fails
-			} else {
-				sni = host
-			}
+		// HARDENED: The Server Name Indication (SNI) must be explicitly provided
+		// in the TLS config and not derived from the dial address. Deriving it
+		// from the address can lead to critical IP-based SNI leaks if the caller
+		// provides a resolved IP address.
+		if tlsCfg.ServerName == "" {
+			return nil, fmt.Errorf("security policy violation: TLS config is present but ServerName is empty; SNI must be set explicitly to prevent leaks")
 		}
+		sni := tlsCfg.ServerName
 
 		// NewUTLSClient will handle the library check and handshake.
 		return NewUTLSClient(rawConn, tlsCfg, sni, rootCAs)
