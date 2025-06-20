@@ -27,6 +27,8 @@ A modular and adaptable censorship circumvention framework designed for resilien
   - [Testing Strategies](#testing-strategies)
   - [Running the Proxy](#running-the-proxy)
 - [Configuration](#configuration)
+- [Security](#security)
+  - [Maintained Dependencies](#maintained-dependencies)
 - [Development](#development)
 - [Contributing](#contributing)
 - [License](#license)
@@ -198,6 +200,20 @@ fingerprints:
       min_version: "1.3"
       max_version: "1.3"
 ```
+
+## Security
+
+### Maintained Dependencies
+
+The project prioritizes security by ensuring that all third-party dependencies are properly maintained and secure. In particular:
+
+- **SOCKS5 Implementation**: We maintain our own fork of the SOCKS5 library (`github.com/gocircum/go-socks5-maintained`) based on the original `github.com/armon/go-socks5` codebase. Our maintained fork undergoes regular security audits and receives updates to address potential vulnerabilities that might exist in the original unmaintained repository (last updated in 2016).
+
+- **Security Audits**: All critical dependencies are regularly reviewed for security vulnerabilities and actively maintained.
+
+- **Dependency Upgrades**: When an unmaintained dependency is identified, it is immediately forked, audited, and replaced with a maintained version under our organization's control.
+
+If you identify any security concerns with our dependencies, please report them through our security vulnerability disclosure process.
 
 ## Development
 

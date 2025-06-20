@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"net"
 
-	"github.com/armon/go-socks5"
+	"github.com/gocircum/go-socks5-maintained"
 	"github.com/gocircum/gocircum/core/engine"
 )
 

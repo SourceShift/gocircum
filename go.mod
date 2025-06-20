@@ -5,7 +5,7 @@ go 1.23.0
 toolchain go1.23.4
 
 require (
-	github.com/armon/go-socks5 v0.0.0-20160902184237-e75332964ef5
+	github.com/gocircum/go-socks5-maintained v1.0.0
 	github.com/refraction-networking/uquic v0.0.6
 	github.com/refraction-networking/utls v1.6.6
 	github.com/stretchr/testify v1.10.0
@@ -15,6 +15,9 @@ require (
 	golang.org/x/time v0.12.0
 	gopkg.in/yaml.v3 v3.0.1
 )
+
+// Temporarily use the original module until our fork is established
+replace github.com/gocircum/go-socks5-maintained v1.0.0 => github.com/armon/go-socks5 v0.0.0-20160902184237-e75332964ef5
 
 require (
 	github.com/andybalholm/brotli v1.1.0 // indirect
