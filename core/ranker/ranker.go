@@ -72,6 +72,16 @@ func NewRanker(logger logging.Logger, dohProviders []config.DoHProvider) (*Ranke
 	}, nil
 }
 
+// SetDoHResolver allows overriding the default DoH resolver, primarily for testing.
+func (r *Ranker) SetDoHResolver(resolver DNSResolver) {
+	r.DoHResolver = resolver
+}
+
+// SetDialerFactory allows overriding the default dialer factory, primarily for testing.
+func (r *Ranker) SetDialerFactory(factory engine.DialerFactory) {
+	r.DialerFactory = factory
+}
+
 // TestAndRank sorts fingerprints by success and latency.
 func (r *Ranker) TestAndRank(ctx context.Context, fingerprints []*config.Fingerprint, canaryDomains []string) ([]StrategyResult, error) {
 	results := make(chan StrategyResult, len(fingerprints))
@@ -153,20 +163,17 @@ func (r *Ranker) testStrategy(ctx context.Context, fingerprint *config.Fingerpri
 		port = "443" // Default to HTTPS port
 	}
 
+	// Securely resolve the canary domain to an IP address using DoH. This prevents
+	// leaking the domain to the local network or ISP, and ensures that we do not
+	// use an IP address for the SNI, which is a major fingerprinting vector.
 	var resolvedIP net.IP
-	// If the host is already an IP, no need to resolve it.
-	parsedIP := net.ParseIP(hostToResolve)
-	if parsedIP != nil {
-		resolvedIP = parsedIP
-	} else {
-		// Use the DoHResolver to resolve the canary domain securely.
-		_, resolvedIP, err = r.DoHResolver.Resolve(ctx, hostToResolve)
-		if err != nil {
-			r.Logger.Warn("Failed to securely resolve canary domain for testing", "domain", hostToResolve, "error", err)
-			return false, 0, fmt.Errorf("failed to securely resolve canary domain '%s': %w", hostToResolve, err)
-		}
+	_, resolvedIP, err = r.DoHResolver.Resolve(ctx, hostToResolve)
+	if err != nil {
+		r.Logger.Warn("Failed to securely resolve canary domain for testing", "domain", hostToResolve, "error", err)
+		return false, 0, fmt.Errorf("failed to securely resolve canary domain '%s': %w", hostToResolve, err)
 	}
 
+	// The address we dial is the resolved IP and the original port.
 	addressToDial := net.JoinHostPort(resolvedIP.String(), port)
 
 	// HARDENED: Explicitly set the ServerName for the TLS configuration

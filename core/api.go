@@ -38,7 +38,6 @@ func NewEngine(cfg *config.FileConfig, logger logging.Logger) (*Engine, error) {
 	if logger == nil {
 		logger = logging.GetLogger()
 	}
-
 	var rankerInstance *ranker.Ranker
 	var err error
 	if len(cfg.DoHProviders) > 0 {
@@ -57,13 +56,12 @@ func NewEngine(cfg *config.FileConfig, logger logging.Logger) (*Engine, error) {
 	}, nil
 }
 
-// Start starts the proxy with a default strategy and address.
-// It is a non-blocking call.
-func (e *Engine) Start() error {
-	return fmt.Errorf("Start is deprecated; use StartProxyWithStrategy with a specific strategy")
+// Ranker returns the engine's ranker instance.
+func (e *Engine) Ranker() *ranker.Ranker {
+	return e.ranker
 }
 
-// Stop gracefully stops the running proxy.
+// Stop gracefully shuts down the active proxy.
 func (e *Engine) Stop() error {
 	e.mu.Lock()
 	defer e.mu.Unlock()

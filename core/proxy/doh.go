@@ -28,17 +28,27 @@ var (
 // DoHResolver implements socks5.Resolver using DNS-over-HTTPS.
 type DoHResolver struct {
 	providers []config.DoHProvider
+	client    *http.Client
+	resolver  *net.Resolver
 }
 
-// NewDoHResolver creates a secure resolver that uses a set of user-provided DoH providers.
-// It is a security risk to fall back to a hardcoded list, so providers are mandatory.
+// NewDoHResolver creates a new DoHResolver with a default HTTP client.
 func NewDoHResolver(providers []config.DoHProvider) (*DoHResolver, error) {
+	return NewDoHResolverWithClient(providers, &http.Client{
+		Timeout: 10 * time.Second,
+	})
+}
+
+// NewDoHResolverWithClient creates a new DoHResolver with a custom HTTP client.
+// This is useful for testing or for environments that require custom TLS configurations.
+func NewDoHResolverWithClient(providers []config.DoHProvider, client *http.Client) (*DoHResolver, error) {
 	if len(providers) == 0 {
-		// Fail-safe: Do not proceed without explicit DoH provider configuration.
-		return nil, fmt.Errorf("security policy violation: at least one DoH provider must be configured")
+		return nil, fmt.Errorf("no DoH providers configured")
 	}
 	return &DoHResolver{
 		providers: providers,
+		client:    client,
+		resolver:  &net.Resolver{},
 	}, nil
 }
 
