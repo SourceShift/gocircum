@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/gocircum/gocircum/core/config"
+	"github.com/gocircum/gocircum/core/engine"
 	"github.com/gocircum/gocircum/pkg/logging"
 	utls "github.com/refraction-networking/utls"
 )
@@ -58,6 +59,13 @@ func (sr *SecureRandomizer) SecureInt(max *big.Int) (*big.Int, error) {
 	// so we ensure access is serialized with a mutex.
 	return new(big.Int).Rand(sr.fallbackRand, max), nil
 }
+
+type BootstrapManager struct {
+	lastRotation time.Time
+	mutex        sync.Mutex
+}
+
+var globalBootstrapManager = &BootstrapManager{}
 
 // DoHResolver implements socks5.Resolver using DNS-over-HTTPS.
 type DoHResolver struct {
@@ -111,38 +119,82 @@ func (r *DoHResolver) getShuffledProviders() []config.DoHProvider {
 // getBootstrapAddresses implements robust bootstrap resolution with multiple fallback mechanisms.
 func getBootstrapAddresses(p *config.DoHProvider) []string {
 	var allBootstraps []string
-
-	// Add primary bootstrap IPs
 	allBootstraps = append(allBootstraps, p.Bootstrap...)
 
-	// Add extended pool if available
 	if len(p.BootstrapPool) > 0 {
-		if p.BootstrapRotationSec <= 0 {
-			// If rotation is disabled or invalid, just append the pool without rotation.
-			allBootstraps = append(allBootstraps, p.BootstrapPool...)
-		} else {
-			// Rotate pool based on time to avoid predictable patterns.
-			now := time.Now().Unix()
-			// Correctly handle the case where the pool is smaller than the rotation interval.
-			rotation := int(now/int64(p.BootstrapRotationSec)) % len(p.BootstrapPool)
-			rotatedPool := append(p.BootstrapPool[rotation:], p.BootstrapPool[:rotation]...)
-			allBootstraps = append(allBootstraps, rotatedPool...)
-		}
+		// Use entropy-based selection instead of time-based rotation
+		poolSelection := globalBootstrapManager.getRandomPoolSubset(p.BootstrapPool, p.BootstrapRotationSec)
+		allBootstraps = append(allBootstraps, poolSelection...)
 	}
 
-	// Fisher-Yates shuffle with crypto/rand to randomize the combined list.
-	for i := len(allBootstraps) - 1; i > 0; i-- {
-		j, err := rand.Int(rand.Reader, big.NewInt(int64(i+1)))
+	// Secure shuffle with fallback handling
+	return globalBootstrapManager.secureShuffleWithJitter(allBootstraps)
+}
+
+func (bm *BootstrapManager) getRandomPoolSubset(pool []string, rotationHint int) []string {
+	bm.mutex.Lock()
+	defer bm.mutex.Unlock()
+
+	// Add temporal jitter to break timing patterns
+	jitter, err := engine.CryptoRandInt(0, max(rotationHint/4, 60)) // Up to 25% jitter
+	if err != nil {
+		jitter = 30 // Fallback jitter
+	}
+
+	now := time.Now().Add(time.Duration(jitter) * time.Second)
+
+	// Only rotate if significant time has passed AND we have entropy
+	if now.Sub(bm.lastRotation) < time.Duration(rotationHint)*time.Second/2 {
+		return pool // Return full pool without rotation
+	}
+
+	// Use secure randomization for pool subset selection
+	subsetSize, err := engine.CryptoRandInt(len(pool)/2, len(pool))
+	if err != nil {
+		return pool // Fallback to full pool
+	}
+
+	shuffled := make([]string, len(pool))
+	copy(shuffled, pool)
+
+	// Secure shuffle
+	for i := len(shuffled) - 1; i > 0; i-- {
+		j, err := engine.CryptoRandInt(0, i)
 		if err != nil {
-			// A failure in the CSPRNG is a catastrophic and unrecoverable system
-			// error. The application cannot continue securely. Panicking is the
-			// appropriate response to halt execution immediately.
-			panic(fmt.Sprintf("FATAL: crypto/rand failed while shuffling bootstrap IPs: %v", err))
+			break // Stop shuffling but continue with partial result
 		}
-		allBootstraps[i], allBootstraps[j.Int64()] = allBootstraps[j.Int64()], allBootstraps[i]
+		shuffled[i], shuffled[j] = shuffled[j], shuffled[i]
 	}
 
-	return allBootstraps
+	bm.lastRotation = now
+	return shuffled[:subsetSize]
+}
+
+func (bm *BootstrapManager) secureShuffleWithJitter(addresses []string) []string {
+	if len(addresses) <= 1 {
+		return addresses
+	}
+
+	shuffled := make([]string, len(addresses))
+	copy(shuffled, addresses)
+
+	// Add temporal jitter before shuffling
+	jitterMs, err := engine.CryptoRandInt(10, 100)
+	if err == nil {
+		time.Sleep(time.Duration(jitterMs) * time.Millisecond)
+	}
+
+	// Secure shuffle with fallback
+	for i := len(shuffled) - 1; i > 0; i-- {
+		j, err := engine.CryptoRandInt(0, i)
+		if err != nil {
+			// Fallback: use time-based pseudo-randomness
+			j = int(time.Now().UnixNano()) % (i + 1)
+		}
+		shuffled[i], shuffled[j] = shuffled[j], shuffled[i]
+	}
+
+	return shuffled
 }
 
 // dialObfuscatedBootstrap disguises the initial bootstrap connection as a regular HTTP GET request.
@@ -359,4 +411,11 @@ func (r *DoHResolver) Resolve(ctx context.Context, name string) (context.Context
 	}
 
 	return ctx, nil, fmt.Errorf("failed to resolve domain %s using any DoH provider: %w", name, lastErr)
+}
+
+func max(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }
