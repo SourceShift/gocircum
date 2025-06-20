@@ -73,8 +73,69 @@ func (r *DoHResolver) getShuffledProviders() []config.DoHProvider {
 	return shuffled
 }
 
+// getBootstrapAddresses implements robust bootstrap resolution with multiple fallback mechanisms.
+func getBootstrapAddresses(p *config.DoHProvider) []string {
+	var allBootstraps []string
+
+	// Add primary bootstrap IPs
+	allBootstraps = append(allBootstraps, p.Bootstrap...)
+
+	// Add extended pool if available
+	if len(p.BootstrapPool) > 0 {
+		if p.BootstrapRotationSec <= 0 {
+			// If rotation is disabled or invalid, just append the pool without rotation.
+			allBootstraps = append(allBootstraps, p.BootstrapPool...)
+		} else {
+			// Rotate pool based on time to avoid predictable patterns.
+			now := time.Now().Unix()
+			// Correctly handle the case where the pool is smaller than the rotation interval.
+			rotation := int(now/int64(p.BootstrapRotationSec)) % len(p.BootstrapPool)
+			rotatedPool := append(p.BootstrapPool[rotation:], p.BootstrapPool[:rotation]...)
+			allBootstraps = append(allBootstraps, rotatedPool...)
+		}
+	}
+
+	// Fisher-Yates shuffle with crypto/rand to randomize the combined list.
+	for i := len(allBootstraps) - 1; i > 0; i-- {
+		j, err := rand.Int(rand.Reader, big.NewInt(int64(i+1)))
+		if err != nil {
+			// A failure in the CSPRNG is a catastrophic and unrecoverable system
+			// error. The application cannot continue securely. Panicking is the
+			// appropriate response to halt execution immediately.
+			panic(fmt.Sprintf("FATAL: crypto/rand failed while shuffling bootstrap IPs: %v", err))
+		}
+		allBootstraps[i], allBootstraps[j.Int64()] = allBootstraps[j.Int64()], allBootstraps[i]
+	}
+
+	return allBootstraps
+}
+
+// dialObfuscatedBootstrap disguises the initial bootstrap connection as a regular HTTP GET request.
+// This is a lightweight attempt to bypass simple L4 firewalls that block non-HTTP traffic on port 443.
+func dialObfuscatedBootstrap(ctx context.Context, dialer *net.Dialer, target, serverName string) (net.Conn, error) {
+	// First establish the raw TCP connection.
+	rawConn, err := dialer.DialContext(ctx, "tcp", target)
+	if err != nil {
+		return nil, fmt.Errorf("obfuscated bootstrap dial failed: %w", err)
+	}
+
+	// Send a fake HTTP request to make the connection look like normal web browsing.
+	// This uses a common User-Agent to further blend in.
+	fakeRequest := fmt.Sprintf("GET / HTTP/1.1\r\nHost: %s\r\nUser-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36\r\nConnection: close\r\n\r\n", serverName)
+	if _, err := rawConn.Write([]byte(fakeRequest)); err != nil {
+		_ = rawConn.Close()
+		return nil, fmt.Errorf("failed to write fake HTTP request for obfuscation: %w", err)
+	}
+
+	// We don't need to wait for or parse the response. The goal is just to make the
+	// initial outbound packet look like HTTP. The uTLS handshake will proceed on this
+	// same connection immediately after. We can return the connection directly.
+	return rawConn, nil
+}
+
 // dialTLSWithUTLS creates a TLS connection using uTLS to resist fingerprinting.
-// It uses the provider's bootstrap IPs to make the initial connection, avoiding DNS leaks.
+// It uses the provider's bootstrap IPs (with rotation and obfuscation if configured)
+// to make the initial connection, avoiding DNS leaks and simple IP blocks.
 func dialTLSWithUTLS(ctx context.Context, network, addr string, cfg *utls.Config, provider config.DoHProvider) (net.Conn, error) {
 	// This dialer is for the raw TCP connection.
 	dialer := &net.Dialer{
@@ -88,28 +149,26 @@ func dialTLSWithUTLS(ctx context.Context, network, addr string, cfg *utls.Config
 		port = "443" // Default to 443 if split fails.
 	}
 
-	shuffledBootstrap := make([]string, len(provider.Bootstrap))
-	copy(shuffledBootstrap, provider.Bootstrap)
-
-	// Fisher-Yates shuffle for bootstrap IPs.
-	for i := len(shuffledBootstrap) - 1; i > 0; i-- {
-		j, err := rand.Int(rand.Reader, big.NewInt(int64(i+1)))
-		if err != nil {
-			// A failure in the CSPRNG is a catastrophic and unrecoverable system
-			// error. The application cannot continue securely. Panicking is the
-			// appropriate response to halt execution immediately.
-			panic(fmt.Sprintf("FATAL: crypto/rand failed while shuffling DoH bootstrap IPs for %s: %v", provider.Name, err))
-		}
-		shuffledBootstrap[i], shuffledBootstrap[j.Int64()] = shuffledBootstrap[j.Int64()], shuffledBootstrap[i]
+	bootstraps := getBootstrapAddresses(&provider)
+	if len(bootstraps) == 0 {
+		return nil, fmt.Errorf("no bootstrap IPs available for provider %s", provider.Name)
 	}
 
 	var lastErr error
-	for _, bootstrapAddr := range shuffledBootstrap {
-		// Re-join the bootstrap IP with the correct port.
+	for _, bootstrapAddr := range bootstraps {
 		bootstrapTarget := net.JoinHostPort(bootstrapAddr, port)
-		rawConn, err := dialer.DialContext(ctx, network, bootstrapTarget)
+
+		var rawConn net.Conn
+		var err error
+		if provider.ObfuscatedBootstrap {
+			// Disguise connection as an HTTP request to avoid simple detection.
+			rawConn, err = dialObfuscatedBootstrap(ctx, dialer, bootstrapTarget, provider.ServerName)
+		} else {
+			rawConn, err = dialer.DialContext(ctx, network, bootstrapTarget)
+		}
+
 		if err != nil {
-			lastErr = err
+			lastErr = fmt.Errorf("dial failed for %s: %w", bootstrapTarget, err)
 			continue
 		}
 
@@ -123,7 +182,7 @@ func dialTLSWithUTLS(ctx context.Context, network, addr string, cfg *utls.Config
 		}
 		return uconn, nil
 	}
-	return nil, fmt.Errorf("failed to connect to any bootstrap server for %s: %w", provider.Name, lastErr)
+	return nil, fmt.Errorf("all bootstrap attempts failed for provider %s: %w", provider.Name, lastErr)
 }
 
 var createClientForProvider = func(provider config.DoHProvider) (*http.Client, error) {
