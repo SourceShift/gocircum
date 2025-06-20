@@ -146,4 +146,16 @@ type DoHProvider struct {
 	RootCA               string   `yaml:"root_ca,omitempty"`
 	FrontDomain          string   `yaml:"front_domain,omitempty"` // The benign domain for TLS SNI.
 	ObfuscatedBootstrap  bool     `yaml:"obfuscated_bootstrap,omitempty"`
+	// Enhanced resilience fields
+	BootstrapDiscovery   BootstrapDiscovery `yaml:"bootstrap_discovery,omitempty"`
+	MaxBootstrapFailures int                `yaml:"max_bootstrap_failures,omitempty"`
+	BootstrapHealthCheck bool               `yaml:"bootstrap_health_check,omitempty"`
+}
+
+// BootstrapDiscovery contains settings for dynamic discovery of bootstrap IPs
+type BootstrapDiscovery struct {
+	EnableDNSOverHTTPS   bool     `yaml:"enable_dns_over_https"`
+	EnableWellKnownPaths bool     `yaml:"enable_well_known_paths"`
+	AlternateResolvers   []string `yaml:"alternate_resolvers"`
+	PeerDiscoveryEnabled bool     `yaml:"peer_discovery_enabled"`
 }
