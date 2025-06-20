@@ -150,15 +150,17 @@ var createClientForProvider = func(provider config.DoHProvider) (*http.Client, e
 	}
 
 	transport := &http.Transport{
-		// CRITICAL FIX: Use DialTLSContext to force uTLS for the handshake.
-		// This is the only dialer that will be used for HTTPS requests.
+		// This function is now the *only* way the transport can establish a connection
+		// for HTTPS requests.
 		DialTLSContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
 			return dialTLSWithUTLS(ctx, network, addr, utlsConfig, provider)
 		},
-		// We are not setting TLSClientConfig or DialContext, as they are ignored
-		// by the transport when DialTLSContext is provided.
-		// By forcing HTTP/1.1 in the uTLS ALPN negotiation, we avoid HTTP/2 issues.
-		// `ForceAttemptHTTP2: false` is the default and is appropriate here.
+		// CRITICAL: Forbid non-TLS connections. If an `http://` URL is ever used,
+		// this dialer will be called, and it will prevent the connection, blocking any
+		// potential cleartext data leak.
+		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			return nil, fmt.Errorf("security policy violation: DoH client does not permit insecure http connections")
+		},
 		ForceAttemptHTTP2: false,
 	}
 
