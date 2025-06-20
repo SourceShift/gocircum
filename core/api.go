@@ -8,7 +8,9 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"strings"
 	"sync"
+	"time"
 
 	"github.com/gocircum/gocircum/core/config"
 	"github.com/gocircum/gocircum/core/engine"
@@ -213,9 +215,33 @@ func establishHTTPConnectTunnel(conn net.Conn, target, host string, userAgent st
 		req.Header.Add(fmt.Sprintf("X-Padding-%x", keyBytes), fmt.Sprintf("%x", valBytes))
 	}
 
-	err = req.Write(conn)
+	// Hardened: Writes the CONNECT request in fragmented chunks to defeat fingerprinting.
+	var requestBuffer strings.Builder
+	err = req.Write(&requestBuffer)
 	if err != nil {
-		return fmt.Errorf("failed to write CONNECT request: %w", err)
+		return fmt.Errorf("failed to write CONNECT request to buffer: %w", err)
+	}
+	requestBytes := []byte(requestBuffer.String())
+
+	offset := 0
+	for offset < len(requestBytes) {
+		// Determine chunk size dynamically to obfuscate the pattern.
+		maxChunk, _ := engine.CryptoRandInt(20, 80) // Use a slightly larger chunk size for a request with a body
+		chunkSize := int(maxChunk)
+		if offset+chunkSize > len(requestBytes) {
+			chunkSize = len(requestBytes) - offset
+		}
+
+		if _, err := conn.Write(requestBytes[offset : offset+chunkSize]); err != nil {
+			return fmt.Errorf("failed to write fragmented CONNECT request: %w", err)
+		}
+		offset += chunkSize
+
+		// Add a small, random delay between fragments.
+		if offset < len(requestBytes) {
+			delay, _ := engine.CryptoRandInt(5, 25)
+			time.Sleep(time.Duration(delay) * time.Millisecond)
+		}
 	}
 
 	resp, err := http.ReadResponse(bufio.NewReader(conn), req)
