@@ -63,9 +63,10 @@ func (r *DoHResolver) getShuffledProviders() []config.DoHProvider {
 	for i := len(shuffled) - 1; i > 0; i-- {
 		j, err := rand.Int(rand.Reader, big.NewInt(int64(i+1)))
 		if err != nil {
-			// A failure in rand.Reader is a serious system issue.
-			// Returning the list unshuffled is a safe fallback.
-			return shuffled
+			// A failure in the CSPRNG is a catastrophic and unrecoverable system
+			// error. The application cannot continue securely. Panicking is the
+			// appropriate response to halt execution immediately.
+			panic(fmt.Sprintf("FATAL: crypto/rand failed: %v", err))
 		}
 		shuffled[i], shuffled[j.Int64()] = shuffled[j.Int64()], shuffled[i]
 	}
@@ -94,7 +95,10 @@ func dialTLSWithUTLS(ctx context.Context, network, addr string, cfg *utls.Config
 	for i := len(shuffledBootstrap) - 1; i > 0; i-- {
 		j, err := rand.Int(rand.Reader, big.NewInt(int64(i+1)))
 		if err != nil {
-			return nil, fmt.Errorf("failed to shuffle bootstrap IPs for %s: %w", provider.Name, err)
+			// A failure in the CSPRNG is a catastrophic and unrecoverable system
+			// error. The application cannot continue securely. Panicking is the
+			// appropriate response to halt execution immediately.
+			panic(fmt.Sprintf("FATAL: crypto/rand failed while shuffling DoH bootstrap IPs for %s: %v", provider.Name, err))
 		}
 		shuffledBootstrap[i], shuffledBootstrap[j.Int64()] = shuffledBootstrap[j.Int64()], shuffledBootstrap[i]
 	}
