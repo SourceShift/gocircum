@@ -10,8 +10,8 @@ import (
 type FileConfig struct {
 	Proxy          *Proxy        `yaml:"proxy,omitempty"`
 	Fingerprints   []Fingerprint `yaml:"fingerprints"`
-	DoHProviders   []DoHProvider `yaml:"doh_providers,omitempty"`
-	CanaryDomains  []string      `yaml:"canary_domains,omitempty"`
+	DoHProviders   []DoHProvider `yaml:"doh_providers"`
+	CanaryDomains  []string      `yaml:"canary_domains"`
 	Disabled       bool          `yaml:"disabled,omitempty"`
 	ConnectTimeout time.Duration `yaml:"connect_timeout,omitempty"`
 }
