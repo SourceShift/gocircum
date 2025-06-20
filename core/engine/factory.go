@@ -104,20 +104,30 @@ func (f *DefaultDialerFactory) NewDialer(transportCfg *config.Transport, tlsCfg 
 		rootCAs = f.GetRootCAs()
 	}
 
+	// Hardened: The dialer now actively prevents IP addresses from being used as SNI.
 	return func(ctx context.Context, network, address string) (net.Conn, error) {
 		rawConn, err := rawDialer(ctx, network, address)
 		if err != nil {
 			return nil, err
 		}
 
-		// HARDENED: The Server Name Indication (SNI) must be explicitly provided
-		// in the TLS config and not derived from the dial address. Deriving it
-		// from the address can lead to critical IP-based SNI leaks if the caller
-		// provides a resolved IP address.
-		if tlsCfg.ServerName == "" {
-			return nil, fmt.Errorf("security policy violation: TLS config is present but ServerName is empty; SNI must be set explicitly to prevent leaks")
-		}
+		// The SNI must be the configured server name.
 		sni := tlsCfg.ServerName
+		if sni == "" {
+			// Fallback is only allowed if the address is not a raw IP.
+			host, _, err := net.SplitHostPort(address)
+			if err != nil {
+				// Could not split, maybe it's just a hostname.
+				host = address
+			}
+
+			// CRITICAL CHECK: If the host is a bare IP, we must abort.
+			if net.ParseIP(host) != nil {
+				_ = rawConn.Close()
+				return nil, fmt.Errorf("security policy violation: cannot use IP address '%s' for TLS SNI. The ServerName must be explicitly configured with a hostname", host)
+			}
+			sni = host
+		}
 
 		// NewUTLSClient will handle the library check and handshake.
 		return NewUTLSClient(rawConn, tlsCfg, sni, rootCAs)
