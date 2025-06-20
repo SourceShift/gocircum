@@ -4,6 +4,7 @@ import (
 	"container/list"
 	"context"
 	"crypto/rand"
+	"encoding/binary"
 	"fmt"
 	"sort"
 	"sync"
@@ -28,6 +29,13 @@ var commonUserAgents = []string{
 	"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36",
 	"Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:107.0) Gecko/20100101 Firefox/107.0",
 	"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.1 Safari/605.1.15",
+}
+
+// Realistic TLS ClientHello patterns for decoy traffic
+var realisticClientHelloSizes = []int{
+	154, 176, 198, 220, 242, 264, 286, 308, 330, 352, // Chrome variations
+	162, 184, 206, 228, 250, 272, 294, 316, 338, 360, // Firefox variations
+	145, 167, 189, 211, 233, 255, 277, 299, 321, 343, // Safari variations
 }
 
 // DNSResolver defines the interface for a DNS resolver.
@@ -188,46 +196,133 @@ func (r *Ranker) generateDecoyTraffic(ctx context.Context, canaryDomains []strin
 	if len(canaryDomains) == 0 {
 		return
 	}
-	numDecoys, err := engine.CryptoRandInt(1, 3) // 1-2 decoy connections
+
+	// Variable number of decoys with realistic distribution
+	numDecoys, err := engine.CryptoRandInt(0, 5) // 0-4 decoys, including no decoys
 	if err != nil {
 		r.Logger.Error("failed to determine number of decoys", "error", err)
 		return
 	}
 
+	// Sometimes generate no decoys to break patterns
+	if numDecoys == 0 {
+		return
+	}
+
 	for i := 0; i < numDecoys; i++ {
-		go func() {
+		go func(decoyIndex int) {
+			// Add variable delay between decoy starts
+			startDelay, err := engine.CryptoRandInt(0, 2000) // 0-2 second stagger
+			if err == nil {
+				time.Sleep(time.Duration(startDelay) * time.Millisecond)
+			}
+
 			// Random decoy domain
 			domainIdx, err := engine.CryptoRandInt(0, len(canaryDomains)-1)
 			if err != nil {
-				return // Ignore decoy failures
+				return
 			}
 			domain := canaryDomains[domainIdx]
 
-			// Create decoy connection with a standard net.Dialer
-			decoyDialer := &net.Dialer{Timeout: 5 * time.Second}
+			// Variable timeout to mimic different network conditions
+			timeout, _ := engine.CryptoRandInt(3, 8)
+			decoyDialer := &net.Dialer{Timeout: time.Duration(timeout) * time.Second}
+
 			conn, err := decoyDialer.DialContext(ctx, "tcp", domain+":443")
 			if err != nil {
-				return // Ignore decoy failures
+				return
 			}
 			defer func() {
 				_ = conn.Close()
 			}()
 
-			// Send partial random data then close to mimic a TLS handshake start
-			randomData := make([]byte, 32)
-			if _, err := rand.Read(randomData); err != nil {
-				return // Ignore decoy failures
-			}
-			_, _ = conn.Write(randomData)
+			// Generate realistic TLS ClientHello-like data
+			clientHelloData := r.generateRealisticClientHello()
 
-			// Random delay before closing
-			delay, err := engine.CryptoRandInt(100, 1000)
+			// Write data in chunks like real TLS handshakes
+			r.writeRealisticTLSPattern(conn, clientHelloData)
+
+			// Variable delay before closing (realistic connection duration)
+			delay, err := engine.CryptoRandInt(100, 3000) // 0.1-3 seconds
 			if err != nil {
-				return // Ignore decoy failures
+				delay = 500 // Fallback
 			}
 			time.Sleep(time.Duration(delay) * time.Millisecond)
-		}()
+		}(i)
 	}
+}
+
+func (r *Ranker) generateRealisticClientHello() []byte {
+	// Choose a realistic size
+	sizeIdx, err := engine.CryptoRandInt(0, len(realisticClientHelloSizes)-1)
+	if err != nil {
+		sizeIdx = 0
+	}
+	size := realisticClientHelloSizes[sizeIdx]
+
+	// Generate realistic TLS ClientHello structure
+	clientHello := make([]byte, size)
+
+	// TLS Record Header (5 bytes)
+	clientHello[0] = 0x16 // Content Type: Handshake
+	clientHello[1] = 0x03 // Version Major: 3
+	clientHello[2] = 0x01 // Version Minor: 1 (TLS 1.0 in record)
+	// Length will be filled below
+
+	// Handshake Header (4 bytes)
+	clientHello[5] = 0x01 // Handshake Type: Client Hello
+	// Length will be filled below
+
+	// Client Hello content starts at byte 9
+	clientHello[9] = 0x03  // Version Major: 3
+	clientHello[10] = 0x03 // Version Minor: 3 (TLS 1.2)
+
+	// Random (32 bytes) - starts at byte 11
+	if _, err := rand.Read(clientHello[11:43]); err != nil {
+		// Fallback to time-based pseudo-random
+		timeBytes := make([]byte, 32)
+		binary.BigEndian.PutUint64(timeBytes, uint64(time.Now().UnixNano()))
+		copy(clientHello[11:43], timeBytes)
+	}
+
+	// Fill the rest with realistic-looking random data
+	if _, err := rand.Read(clientHello[43:]); err != nil {
+		// Fallback pattern
+		for i := 43; i < len(clientHello); i++ {
+			clientHello[i] = byte(i % 256)
+		}
+	}
+
+	// Set correct lengths
+	handshakeLen := size - 9
+	binary.BigEndian.PutUint16(clientHello[3:5], uint16(handshakeLen+4))
+	clientHello[6] = byte((handshakeLen >> 16) & 0xFF)
+	binary.BigEndian.PutUint16(clientHello[7:9], uint16(handshakeLen))
+
+	return clientHello
+}
+
+func (r *Ranker) writeRealisticTLSPattern(conn net.Conn, data []byte) {
+	// Some connections send ClientHello in one packet
+	// Others fragment it across multiple writes
+	fragmentChance, _ := engine.CryptoRandInt(0, 10)
+
+	if fragmentChance < 7 || len(data) < 100 {
+		// 70% chance: send in one packet (common for small ClientHellos)
+		_, _ = conn.Write(data)
+		return
+	}
+
+	// 30% chance: fragment the ClientHello
+	firstChunk, _ := engine.CryptoRandInt(50, len(data)/2)
+
+	_, _ = conn.Write(data[:firstChunk])
+
+	// Small delay between fragments
+	delay, _ := engine.CryptoRandInt(1, 10)
+	time.Sleep(time.Duration(delay) * time.Millisecond)
+
+	_, _ = conn.Write(data[firstChunk:])
 }
 
 // testStrategy performs a single connection test, including an application-layer data exchange.
