@@ -19,13 +19,13 @@ import (
 
 // Engine is the main controller for the circumvention library.
 type Engine struct {
-	ranker         *ranker.Ranker
-	config         *config.FileConfig
-	activeProxy    *proxy.Proxy
 	mu             sync.Mutex
+	logger         logging.Logger
+	ranker         *ranker.Ranker
+	activeProxy    *proxy.Proxy
 	proxyErrorChan chan error
 	lastProxyError error
-	logger         logging.Logger
+	fileConfig     *config.FileConfig
 	cancelProxy    context.CancelFunc
 	dialerFactory  *engine.DefaultDialerFactory
 }
@@ -50,7 +50,7 @@ func NewEngine(cfg *config.FileConfig, logger logging.Logger) (*Engine, error) {
 
 	return &Engine{
 		ranker:         rankerInstance,
-		config:         cfg,
+		fileConfig:     cfg,
 		proxyErrorChan: make(chan error, 1),
 		logger:         logger.With("component", "engine"),
 		dialerFactory:  &engine.DefaultDialerFactory{},
@@ -92,7 +92,7 @@ func (e *Engine) Status() (string, error) {
 	lastErr := e.lastProxyError
 	e.mu.Unlock()
 
-	// Check for a new failure message first.
+	// Check for a new failure message first. This makes the status check authoritative.
 	select {
 	case err := <-e.proxyErrorChan:
 		e.mu.Lock()
@@ -104,7 +104,6 @@ func (e *Engine) Status() (string, error) {
 		// No immediate error, proceed.
 	}
 
-	// If we have a stored error, that's our state.
 	if lastErr != nil {
 		return "Proxy failed", lastErr
 	}
@@ -124,10 +123,10 @@ func (e *Engine) TestStrategies(ctx context.Context) ([]ranker.StrategyResult, e
 	e.logger.Info("Testing all strategies...")
 	// Convert to slice of pointers for the ranker
 	var fps []*config.Fingerprint
-	for i := range e.config.Fingerprints {
-		fps = append(fps, &e.config.Fingerprints[i])
+	for i := range e.fileConfig.Fingerprints {
+		fps = append(fps, &e.fileConfig.Fingerprints[i])
 	}
-	results, err := e.ranker.TestAndRank(ctx, fps, e.config.CanaryDomains)
+	results, err := e.ranker.TestAndRank(ctx, fps, e.fileConfig.CanaryDomains)
 	if err != nil {
 		e.logger.Error("Failed to test and rank strategies", "error", err)
 	} else {
@@ -153,7 +152,7 @@ func (e *Engine) StartProxyWithStrategy(ctx context.Context, addr string, strate
 		return "", fmt.Errorf("could not create dialer for strategy %s: %w", strategy.ID, err)
 	}
 
-	dohResolver, err := proxy.NewDoHResolver(e.config.DoHProviders)
+	dohResolver, err := proxy.NewDoHResolver(e.fileConfig.DoHProviders)
 	if err != nil {
 		return "", fmt.Errorf("failed to create DoH resolver for proxy: %w", err)
 	}
@@ -335,9 +334,9 @@ func (e *Engine) GetBestStrategy(ctx context.Context) (*config.Fingerprint, erro
 
 // GetStrategyByID returns a strategy fingerprint by its ID.
 func (e *Engine) GetStrategyByID(id string) (*config.Fingerprint, error) {
-	for i, fp := range e.config.Fingerprints {
+	for i, fp := range e.fileConfig.Fingerprints {
 		if fp.ID == id {
-			return &e.config.Fingerprints[i], nil
+			return &e.fileConfig.Fingerprints[i], nil
 		}
 	}
 	return nil, fmt.Errorf("strategy with ID '%s' not found", id)
@@ -372,4 +371,12 @@ func getRandomUserAgent() (string, error) {
 		return "", fmt.Errorf("failed to get random user agent: %w", err)
 	}
 	return engine.PopularUserAgents[uaIndex], nil
+}
+
+// SetDialerFactoryForTesting allows replacing the dialer factory for testing purposes.
+// This should not be used in production code.
+func (e *Engine) SetDialerFactoryForTesting(factory engine.DialerFactory) {
+	if e.ranker != nil {
+		e.ranker.DialerFactory = factory
+	}
 }

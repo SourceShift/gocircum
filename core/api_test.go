@@ -248,47 +248,54 @@ func TestEngine_GetBestStrategy(t *testing.T) {
 		TLS: config.TLS{
 			Library:       "utls",
 			ClientHelloID: "HelloChrome_Auto",
+			MinVersion:    "1.3",
+			MaxVersion:    "1.3",
 		},
 	}
 
-	// This is an invalid strategy that should fail because of an invalid ClientHelloID.
-	fpInvalid := config.Fingerprint{
+	invalidFp := config.Fingerprint{
 		ID:          "invalid-strategy",
-		Description: "An invalid strategy",
+		Description: "An invalid strategy that should fail ranking",
 		DomainFronting: &config.DomainFronting{
 			Enabled:      true,
-			FrontDomain:  "127.0.0.1:12345", // A port that is not listening
+			FrontDomain:  "127.0.0.1:1", // A port that is guaranteed to not be listening
 			CovertTarget: "invalid.example.com",
 		},
 		Transport: config.Transport{Protocol: "tcp"},
 		TLS: config.TLS{
 			Library:       "utls",
-			ClientHelloID: "invalid-hello-id",
+			ClientHelloID: "HelloChrome_Auto",
+			MinVersion:    "1.3",
+			MaxVersion:    "1.3",
 		},
 	}
 
+	// --- Configure the engine ---
 	fileConfig := &config.FileConfig{
-		Fingerprints:  []config.Fingerprint{fp, fpInvalid},
-		DoHProviders:  []config.DoHProvider{{Name: "dummy", URL: "https://1.2.3.4/dns-query", Bootstrap: []string{"1.2.3.4"}}},
-		CanaryDomains: []string{server.Listener.Addr().String()},
+		Fingerprints:  []config.Fingerprint{fp, invalidFp},
+		DoHProviders:  []config.DoHProvider{{Name: "dummy", URL: "dummy"}},
+		CanaryDomains: []string{server.Listener.Addr().String()}, // Test against our mock server
 	}
 
-	engine, err := NewEngine(fileConfig, logging.GetLogger())
+	e, err := NewEngine(fileConfig, logging.GetLogger())
 	assert.NoError(t, err, "NewEngine should not return an error")
 
-	// Create a custom dialer factory for the ranker that trusts the test server's certs.
-	if engine.ranker != nil {
-		// Use a simple implementation that doesn't rely on DefaultDialerFactory
-		engine.ranker.DialerFactory = &testDialerFactory{
-			rootCAs: server.Client().Transport.(*http.Transport).TLSClientConfig.RootCAs,
-		}
-	}
+	// Create a cert pool with the test server's certificate so our client can trust it.
+	certPool := x509.NewCertPool()
+	certPool.AddCert(server.Certificate())
+
+	// Create a custom dialer factory that uses this cert pool
+	// and inject it into the engine's ranker for this test.
+	testDialerFactory := engine.NewDefaultDialerFactory(func() *x509.CertPool {
+		return certPool
+	})
+	e.SetDialerFactoryForTesting(testDialerFactory)
 
 	// --- Execute and Verify ---
-	best, err := engine.GetBestStrategy(context.Background())
+	best, err := e.GetBestStrategy(context.Background())
 	assert.NoError(t, err, "GetBestStrategy should succeed")
 	assert.NotNil(t, best, "Best strategy should not be nil")
-	assert.Equal(t, "test-strategy-for-ranking", best.ID, "The best strategy should be the one that points to our test server")
+	assert.Equal(t, "test-strategy-for-ranking", best.ID, "The best strategy should be the valid one")
 }
 
 func TestEngine_DomainFronting(t *testing.T) {
@@ -413,22 +420,4 @@ func TestEngine_NewProxyForStrategy(t *testing.T) {
 	}()
 
 	assert.NotEmpty(t, proxyServer.Addr())
-}
-
-// testDialerFactory is a test implementation of engine.DialerFactory
-type testDialerFactory struct {
-	rootCAs *x509.CertPool
-}
-
-// NewDialer implements engine.DialerFactory
-func (f *testDialerFactory) NewDialer(_ *config.Transport, _ *config.TLS) (engine.Dialer, error) {
-	return func(ctx context.Context, network, address string) (net.Conn, error) {
-		dialer := &net.Dialer{Timeout: 5 * time.Second}
-		return dialer.DialContext(ctx, network, address)
-	}, nil
-}
-
-// GetRootCAs returns the root CAs for the test
-func (f *testDialerFactory) GetRootCAs() *x509.CertPool {
-	return f.rootCAs
 }
