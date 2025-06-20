@@ -259,24 +259,32 @@ type fragmentingConn struct {
 
 // Write fragments the first Write call, which should contain the ClientHello.
 func (c *fragmentingConn) Write(b []byte) (n int, err error) {
-	// Only fragment the first Write call.
+	// Only fragment the first packet of a connection.
 	if c.wrotePacket {
 		return c.Conn.Write(b)
 	}
 	c.wrotePacket = true
 
+	// Ensure there's a fragmentation algorithm configured.
+	if c.cfg == nil || c.cfg.Algorithm == "" {
+		// Default to a simple write if no algorithm is specified.
+		return c.Conn.Write(b)
+	}
+
+	// Route to the appropriate fragmentation algorithm.
 	switch c.cfg.Algorithm {
 	case "static":
 		return c.writeStatic(b)
 	case "even":
 		return c.writeEven(b)
 	default:
-		// Default to static distribution if the type is unknown or not specified.
-		return c.writeStatic(b)
+		c.logError(fmt.Errorf("unknown fragmentation algorithm: %s", c.cfg.Algorithm), "fragmentation error")
+		// Fallback to a simple write if the algorithm is unknown.
+		return c.Conn.Write(b)
 	}
 }
 
-// writeStatic fragments the ClientHello into chunks of predetermined sizes.
+// writeStatic fragments the data based on a predefined static list of chunk sizes.
 func (c *fragmentingConn) writeStatic(b []byte) (n int, err error) {
 	totalSent := 0
 	remaining := len(b)
@@ -292,11 +300,23 @@ func (c *fragmentingConn) writeStatic(b []byte) (n int, err error) {
 		maxChunk := sizeRange[1]
 
 		var chunkSize int
-		// HARDENED: Fail the connection if we cannot generate a secure random number.
+		// Try to get a cryptographically secure random number.
 		chunkSize, err = CryptoRandInt(minChunk, maxChunk)
 		if err != nil {
-			c.logError(err, "fatal: cannot generate secure random number for chunk size")
-			return totalSent, fmt.Errorf("CSPRNG failure for fragmentation: %w", err)
+			// Fallback: use time-based jitter. Not secure, but unpredictable
+			// enough to prevent trivial fingerprinting and avoids connection failure.
+			logging.GetLogger().Warn("CSPRNG failed for fragmentation chunk size, using time-based fallback", "error", err)
+			timeNanos := time.Now().UnixNano()
+			range_ := maxChunk - minChunk + 1
+			if range_ <= 0 {
+				chunkSize = minChunk
+			} else {
+				chunkSize = minChunk + int(timeNanos%int64(range_))
+			}
+		}
+
+		if chunkSize <= 0 {
+			chunkSize = 1 // Ensure we always send at least 1 byte if calculations are off.
 		}
 
 		if chunkSize > remaining {
@@ -313,31 +333,25 @@ func (c *fragmentingConn) writeStatic(b []byte) (n int, err error) {
 		isLastChunk := (i == len(packetSizes)-1) || (remaining == 0)
 		if !isLastChunk {
 			var delayMs int
-			// HARDENED: Fail the connection if we cannot generate a secure random number.
+			// Also apply fallback for delay.
 			delayMs, err = CryptoRandInt(delayRange[0], delayRange[1])
 			if err != nil {
-				c.logError(err, "fatal: cannot generate secure random number for delay")
-				return totalSent, fmt.Errorf("CSPRNG failure for fragmentation delay: %w", err)
+				logging.GetLogger().Warn("CSPRNG failed for fragmentation delay, using time-based fallback", "error", err)
+				timeNanos := time.Now().UnixNano()
+				range_ := delayRange[1] - delayRange[0] + 1
+				if range_ <= 0 {
+					delayMs = delayRange[0]
+				} else {
+					delayMs = delayRange[0] + int(timeNanos%int64(range_))
+				}
 			}
 			time.Sleep(time.Duration(delayMs) * time.Millisecond)
 		}
 	}
-
-	// If there's any data left over, send it in one last chunk.
-	if remaining > 0 {
-		sent, writeErr := c.Conn.Write(b[totalSent:])
-		if writeErr != nil {
-			return totalSent, writeErr
-		}
-		totalSent += sent
-	}
-
 	return totalSent, nil
 }
 
-// writeEven fragments the ClientHello into chunks of random sizes within a configured range.
-// The number of chunks is not fixed; instead, we send random-sized chunks until the
-// entire payload is sent. This is more robust against fingerprinting than a fixed number of chunks.
+// writeEven fragments the data into a specified number of even-sized chunks.
 func (c *fragmentingConn) writeEven(b []byte) (n int, err error) {
 	totalSent := 0
 	remaining := len(b)

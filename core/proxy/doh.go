@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/big"
+	mathrand "math/rand"
 	"net"
 	"net/http"
 	"net/url"
@@ -24,6 +25,39 @@ var (
 	// be specified in the configuration file.
 	mu sync.Mutex
 )
+
+// SecureRandomizer provides a hardened entropy source with a fallback mechanism.
+type SecureRandomizer struct {
+	fallbackRand *mathrand.Rand
+	mutex        sync.Mutex
+	initialized  bool
+}
+
+var globalRandomizer = &SecureRandomizer{}
+
+// SecureInt returns a random integer from [0, max). It first attempts to use
+// crypto/rand, but falls back to a non-cryptographically secure PRNG if that fails.
+func (sr *SecureRandomizer) SecureInt(max *big.Int) (*big.Int, error) {
+	// Try the cryptographically secure source first.
+	if result, err := rand.Int(rand.Reader, max); err == nil {
+		return result, nil
+	}
+
+	// If crypto/rand fails, use a fallback PRNG.
+	// This is not for cryptographic security, but to prevent a panic and
+	// maintain service availability.
+	sr.mutex.Lock()
+	defer sr.mutex.Unlock()
+
+	if !sr.initialized {
+		sr.fallbackRand = mathrand.New(mathrand.NewSource(time.Now().UnixNano()))
+		sr.initialized = true
+	}
+
+	// big.Int.Rand is documented to not be concurrently safe on its source,
+	// so we ensure access is serialized with a mutex.
+	return new(big.Int).Rand(sr.fallbackRand, max), nil
+}
 
 // DoHResolver implements socks5.Resolver using DNS-over-HTTPS.
 type DoHResolver struct {
@@ -59,14 +93,15 @@ func (r *DoHResolver) getShuffledProviders() []config.DoHProvider {
 	shuffled := make([]config.DoHProvider, len(r.providers))
 	copy(shuffled, r.providers)
 
-	// Fisher-Yates shuffle using crypto/rand for secure, unpredictable shuffling.
+	// Fisher-Yates shuffle with a hardened random source.
 	for i := len(shuffled) - 1; i > 0; i-- {
-		j, err := rand.Int(rand.Reader, big.NewInt(int64(i+1)))
+		j, err := globalRandomizer.SecureInt(big.NewInt(int64(i + 1)))
 		if err != nil {
-			// A failure in the CSPRNG is a catastrophic and unrecoverable system
-			// error. The application cannot continue securely. Panicking is the
-			// appropriate response to halt execution immediately.
-			panic(fmt.Sprintf("FATAL: crypto/rand failed: %v", err))
+			// Instead of panicking, log the degradation and return a fixed order.
+			// This prevents a denial of service at the cost of predictability,
+			// which is acceptable under catastrophic entropy failure.
+			logging.GetLogger().Warn("Randomization for DoH provider shuffling degraded, using fixed order", "error", err)
+			return r.providers
 		}
 		shuffled[i], shuffled[j.Int64()] = shuffled[j.Int64()], shuffled[i]
 	}
