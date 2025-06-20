@@ -298,14 +298,16 @@ func (e *Engine) createDialerForStrategy(fp *config.Fingerprint) (engine.Dialer,
 		return nil, fmt.Errorf("security policy violation: strategy '%s' must have domain_fronting enabled", fp.ID)
 	}
 
-	// 1. Create the base dialer (TCP or QUIC) without domain fronting logic.
-	baseDialer, err := e.dialerFactory.NewDialer(&fp.Transport, &fp.TLS)
+	// 1. Create a RAW base dialer (TCP or QUIC). We pass a nil TLS config
+	// to the factory to prevent it from pre-emptively wrapping the connection in TLS.
+	// The domain fronting dialer is responsible for the TLS handshake.
+	rawDialer, err := e.dialerFactory.NewDialer(&fp.Transport, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create base dialer: %w", err)
 	}
 
-	// 2. The only allowed path is to wrap the base dialer with the domain fronting dialer.
-	return e.createDomainFrontingDialer(fp, baseDialer), nil
+	// 2. The only allowed path is to wrap the raw dialer with the domain fronting dialer.
+	return e.createDomainFrontingDialer(fp, rawDialer), nil
 }
 
 // GetBestStrategy ranks all strategies and returns the one with the best performance.
