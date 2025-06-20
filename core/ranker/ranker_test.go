@@ -43,12 +43,12 @@ func (m *mockResolver) Resolve(ctx context.Context, name string) (context.Contex
 }
 
 // mockDialer simulates network dialing for tests.
-// It now checks if the address is the expected IP and simulates the HTTP exchange.
 func mockDialer(t *testing.T, ctrl *gomock.Controller, succeedDial bool, succeedHTTP bool, delay time.Duration, expectedAddr string) engine.Dialer {
 	return func(ctx context.Context, network, address string) (net.Conn, error) {
 		if address != expectedAddr {
+			t.Helper()
 			t.Errorf("dialer called with wrong address: got %s, want %s", address, expectedAddr)
-			return nil, fmt.Errorf("unexpected address for dialer")
+			return nil, fmt.Errorf("unexpected address for dialer: %s", address)
 		}
 
 		if succeedDial {
@@ -122,14 +122,16 @@ func TestRanker_TestAndRank(t *testing.T) {
 	ranker.DoHResolver = &mockResolver{}                        // Inject the mock resolver
 
 	fingerprints := []*config.Fingerprint{
-		{ID: "fp1", TLS: config.TLS{ClientHelloID: "fp1"}}, // Should succeed fast
-		{ID: "fp2", TLS: config.TLS{ClientHelloID: "fp2"}}, // Should succeed slow
+		{ID: "fp1", TLS: config.TLS{ClientHelloID: "fp1"}}, // Succeeds fast
+		{ID: "fp2", TLS: config.TLS{ClientHelloID: "fp2"}}, // Succeeds slow
 		{ID: "fp3", TLS: config.TLS{ClientHelloID: "fp3"}}, // Should fail dial
 		{ID: "fp4", TLS: config.TLS{ClientHelloID: "fp4"}}, // Should fail http
 	}
 
-	canaryDomains := []string{"www.example.com"} // Domain without port now
-	results, err := ranker.TestAndRank(context.Background(), fingerprints, canaryDomains)
+	canaryDomains := []string{"www.example.com"}
+	// Create a context that tells the ranker this is a test run
+	testCtx := context.WithValue(context.Background(), testContextKey, true)
+	results, err := ranker.TestAndRank(testCtx, fingerprints, canaryDomains)
 	if err != nil {
 		t.Fatalf("TestAndRank failed: %v", err)
 	}
@@ -138,37 +140,34 @@ func TestRanker_TestAndRank(t *testing.T) {
 		t.Fatalf("Expected 4 results, got %d", len(results))
 	}
 
-	// Find fp3 and fp4 results to check their failure status
-	var fp3Result, fp4Result StrategyResult
-	foundFp3, foundFp4 := false, false
-	for _, res := range results {
-		if res.Fingerprint.ID == "fp3" {
-			fp3Result = res
-			foundFp3 = true
-		}
-		if res.Fingerprint.ID == "fp4" {
-			fp4Result = res
-			foundFp4 = true
-		}
-	}
-
-	if !foundFp3 || !foundFp4 {
-		t.Fatalf("Expected to find results for fp3 and fp4")
-	}
-
+	// Because we disabled shuffling and expansion for the test, the order should be deterministic.
 	if !results[0].Success || results[0].Fingerprint.ID != "fp1" {
 		t.Errorf("Expected fp1 to be the best ranked, but got %s (success: %v)", results[0].Fingerprint.ID, results[0].Success)
 	}
-
 	if !results[1].Success || results[1].Fingerprint.ID != "fp2" {
 		t.Errorf("Expected fp2 to be the second best, but got %s (success: %v)", results[1].Fingerprint.ID, results[1].Success)
 	}
 
-	if fp3Result.Success {
-		t.Errorf("Expected fp3 to be a failed strategy, but it succeeded")
+	// The remaining two results should be the failed strategies.
+	failedResults := results[2:]
+	foundFp3 := false
+	foundFp4 := false
+	for _, res := range failedResults {
+		if res.Success {
+			t.Errorf("Expected a failed strategy, but got a success for %s", res.Fingerprint.ID)
+		}
+		if res.Fingerprint.ID == "fp3" {
+			foundFp3 = true
+		}
+		if res.Fingerprint.ID == "fp4" {
+			foundFp4 = true
+		}
 	}
 
-	if fp4Result.Success {
-		t.Errorf("Expected fp4 to be a failed strategy, but it succeeded")
+	if !foundFp3 {
+		t.Errorf("Did not find failed result for fp3")
+	}
+	if !foundFp4 {
+		t.Errorf("Did not find failed result for fp4")
 	}
 }
