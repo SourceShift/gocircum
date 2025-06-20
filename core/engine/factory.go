@@ -340,16 +340,9 @@ func (c *fragmentingConn) writeStatic(b []byte) (n int, err error) {
 		// Try to get a cryptographically secure random number.
 		chunkSize, err = CryptoRandInt(minChunk, maxChunk)
 		if err != nil {
-			// Fallback: use time-based jitter. Not secure, but unpredictable
-			// enough to prevent trivial fingerprinting and avoids connection failure.
-			logging.GetLogger().Warn("CSPRNG failed for fragmentation chunk size, using time-based fallback", "error", err)
-			timeNanos := time.Now().UnixNano()
-			range_ := maxChunk - minChunk + 1
-			if range_ <= 0 {
-				chunkSize = minChunk
-			} else {
-				chunkSize = minChunk + int(timeNanos%int64(range_))
-			}
+			c.logError(err, "fatal: cannot generate secure random number for chunk size")
+			// Return an error to abort the Write and the connection attempt.
+			return totalSent, fmt.Errorf("CSPRNG failure for fragmentation: %w", err)
 		}
 
 		if chunkSize <= 0 {
@@ -370,17 +363,12 @@ func (c *fragmentingConn) writeStatic(b []byte) (n int, err error) {
 		isLastChunk := (i == len(packetSizes)-1) || (remaining == 0)
 		if !isLastChunk {
 			var delayMs int
-			// Also apply fallback for delay.
+			// HARDENED: Fail the connection if we cannot generate a secure random number.
 			delayMs, err = CryptoRandInt(delayRange[0], delayRange[1])
 			if err != nil {
-				logging.GetLogger().Warn("CSPRNG failed for fragmentation delay, using time-based fallback", "error", err)
-				timeNanos := time.Now().UnixNano()
-				range_ := delayRange[1] - delayRange[0] + 1
-				if range_ <= 0 {
-					delayMs = delayRange[0]
-				} else {
-					delayMs = delayRange[0] + int(timeNanos%int64(range_))
-				}
+				c.logError(err, "fatal: cannot generate secure random number for delay")
+				// Return an error to abort the Write and the connection attempt.
+				return totalSent, fmt.Errorf("CSPRNG failure for fragmentation delay: %w", err)
 			}
 			time.Sleep(time.Duration(delayMs) * time.Millisecond)
 		}
