@@ -169,10 +169,10 @@ func (r *Ranker) testStrategy(ctx context.Context, fingerprint *config.Fingerpri
 
 	addressToDial := net.JoinHostPort(resolvedIP.String(), port)
 
-	// CRITICAL FIX: Explicitly set the ServerName for the TLS configuration
+	// HARDENED: Explicitly set the ServerName for the TLS configuration
 	// to the original hostname. This ensures the SNI is the domain name, not the IP address.
 	tlsCfg := fingerprint.TLS
-	tlsCfg.ServerName = hostToResolve
+	tlsCfg.ServerName = hostToResolve // This is the critical fix.
 
 	dialer, err := r.DialerFactory.NewDialer(&fingerprint.Transport, &tlsCfg)
 	if err != nil {
