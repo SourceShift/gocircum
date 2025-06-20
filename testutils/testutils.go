@@ -70,7 +70,7 @@ func (s *MockTLSEchoServer) run() {
 			return // Listener was closed
 		}
 		go func(c net.Conn) {
-			defer c.Close()
+			defer func() { _ = c.Close() }()
 			_, _ = io.Copy(c, c)
 		}(conn)
 	}
@@ -83,7 +83,7 @@ func (s *MockTLSEchoServer) Addr() string {
 
 // Close stops the server.
 func (s *MockTLSEchoServer) Close() {
-	s.listener.Close()
+	_ = s.listener.Close()
 }
 
 // getTestCert returns a cached test certificate, generating it only once.
@@ -138,7 +138,7 @@ func CheckSOCKS5Proxy(proxyAddr, targetAddr string) error {
 	if err != nil {
 		return err
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	// Simple check: send data and expect it to be echoed back.
 	payload := "hello"

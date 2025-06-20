@@ -6,8 +6,6 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"fmt"
-	"gocircum/core/config"
-	"gocircum/pkg/logging"
 	"math/big"
 	"net"
 	"net/http"
@@ -15,6 +13,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/gocircum/gocircum/core/config"
+	"github.com/gocircum/gocircum/pkg/logging"
 	utls "github.com/refraction-networking/utls"
 )
 
@@ -221,18 +221,18 @@ func (r *DoHResolver) Resolve(ctx context.Context, name string) (context.Context
 		}
 
 		if resp.StatusCode != http.StatusOK {
-			resp.Body.Close()
+			_ = resp.Body.Close()
 			lastErr = fmt.Errorf("DoH request to %s failed with status: %s", provider.Name, resp.Status)
 			continue
 		}
 
 		var dohResponse DoHResponse
 		if err := json.NewDecoder(resp.Body).Decode(&dohResponse); err != nil {
-			resp.Body.Close()
+			_ = resp.Body.Close()
 			lastErr = fmt.Errorf("failed to decode DoH response from %s: %w", provider.Name, err)
 			continue
 		}
-		resp.Body.Close()
+		_ = resp.Body.Close()
 
 		for _, answer := range dohResponse.Answer {
 			// Type 1 is an A record (IPv4).

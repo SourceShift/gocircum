@@ -47,7 +47,7 @@ func TestQUICTransportListenContextCancellation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Listen failed: %v", err)
 	}
-	defer listener.Close()
+	defer func() { _ = listener.Close() }()
 
 	var wg sync.WaitGroup
 	wg.Add(1)

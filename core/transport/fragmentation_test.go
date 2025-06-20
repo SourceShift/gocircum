@@ -23,7 +23,7 @@ func TestFragmentationMiddleware(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create listener: %v", err)
 	}
-	defer listener.Close()
+	defer func() { _ = listener.Close() }()
 
 	var receivedData bytes.Buffer
 	go func() {
@@ -33,7 +33,7 @@ func TestFragmentationMiddleware(t *testing.T) {
 			t.Errorf("Accept failed: %v", err)
 			return
 		}
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 
 		buf := make([]byte, fragmentSize)
 		for {
@@ -63,7 +63,7 @@ func TestFragmentationMiddleware(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Dial failed: %v", err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	_, err = conn.Write([]byte(message))
 	if err != nil {
@@ -71,7 +71,7 @@ func TestFragmentationMiddleware(t *testing.T) {
 	}
 
 	// Give the server time to read all data
-	conn.Close()
+	_ = conn.Close()
 	wg.Wait()
 
 	if receivedData.String() != message {
