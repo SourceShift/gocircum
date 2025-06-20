@@ -188,8 +188,9 @@ func (r *Ranker) testStrategy(ctx context.Context, fingerprint *config.Fingerpri
 
 	jitterMs, err := engine.CryptoRandInt(50, 250)
 	if err != nil {
-		r.Logger.Error("failed to generate secure jitter", "error", err)
-		jitterMs = 100
+		// HARDENED: Fail the test if we cannot generate a secure random jitter.
+		// Continuing with a predictable default would create a fingerprint.
+		return false, 0, fmt.Errorf("CSPRNG failure for jitter generation: %w", err)
 	}
 	time.Sleep(time.Duration(jitterMs) * time.Millisecond)
 
@@ -212,12 +213,19 @@ func (r *Ranker) testStrategy(ctx context.Context, fingerprint *config.Fingerpri
 	userAgent := commonUserAgents[userAgentIndex]
 	requestBuilder.WriteString(fmt.Sprintf("GET / HTTP/1.1\r\nHost: %s\r\nConnection: close\r\nUser-Agent: %s\r\n", hostToResolve, userAgent))
 
-	paddingHeaders, _ := engine.CryptoRandInt(2, 5)
+	paddingHeaders, err := engine.CryptoRandInt(2, 5)
+	if err != nil {
+		return false, 0, fmt.Errorf("CSPRNG failure for padding header count: %w", err)
+	}
 	for i := 0; i < int(paddingHeaders); i++ {
 		keyBytes := make([]byte, 8)
 		valBytes := make([]byte, 16)
-		_, _ = rand.Read(keyBytes)
-		_, _ = rand.Read(valBytes)
+		if _, err := rand.Read(keyBytes); err != nil {
+			return false, 0, fmt.Errorf("CSPRNG failure for padding key generation: %w", err)
+		}
+		if _, err := rand.Read(valBytes); err != nil {
+			return false, 0, fmt.Errorf("CSPRNG failure for padding value generation: %w", err)
+		}
 		requestBuilder.WriteString(fmt.Sprintf("X-Padding-%x: %x\r\n", keyBytes, valBytes))
 	}
 	requestBuilder.WriteString("\r\n")
