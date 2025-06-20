@@ -5,6 +5,7 @@ import (
 	"crypto/x509"
 	"fmt"
 	"net"
+	"strings"
 	"time"
 
 	"github.com/gocircum/gocircum/core/config"
@@ -111,27 +112,63 @@ func (f *DefaultDialerFactory) NewDialer(transportCfg *config.Transport, tlsCfg 
 			return nil, err
 		}
 
-		// The SNI must be the configured server name.
-		sni := tlsCfg.ServerName
-		if sni == "" {
-			// Fallback is only allowed if the address is not a raw IP.
-			host, _, err := net.SplitHostPort(address)
-			if err != nil {
-				// Could not split, maybe it's just a hostname.
-				host = address
-			}
-
-			// CRITICAL CHECK: If the host is a bare IP, we must abort.
-			if net.ParseIP(host) != nil {
-				_ = rawConn.Close()
-				return nil, fmt.Errorf("security policy violation: cannot use IP address '%s' for TLS SNI. The ServerName must be explicitly configured with a hostname", host)
-			}
-			sni = host
+		sni, err := validateAndExtractSNI(address, tlsCfg.ServerName)
+		if err != nil {
+			_ = rawConn.Close()
+			return nil, err
 		}
 
 		// NewUTLSClient will handle the library check and handshake.
 		return NewUTLSClient(rawConn, tlsCfg, sni, rootCAs)
 	}, nil
+}
+
+// Enhanced validation with comprehensive IP detection
+func validateAndExtractSNI(address, configuredServerName string) (string, error) {
+	if configuredServerName != "" {
+		// Validate that configured server name is not an IP
+		if net.ParseIP(configuredServerName) != nil {
+			return "", fmt.Errorf("security policy violation: configured ServerName cannot be an IP address: %s", configuredServerName)
+		}
+		return configuredServerName, nil
+	}
+
+	host, _, err := net.SplitHostPort(address)
+	if err != nil {
+		host = address
+	}
+
+	// Multiple validation layers for IP detection
+	if net.ParseIP(host) != nil {
+		return "", fmt.Errorf("security policy violation: cannot derive SNI from IP address '%s'. ServerName must be explicitly configured with a valid hostname", host)
+	}
+
+	// Additional validation for IPv6 addresses that might slip through
+	if strings.Contains(host, ":") && strings.Count(host, ":") > 1 {
+		return "", fmt.Errorf("security policy violation: suspected IPv6 address used for SNI: %s", host)
+	}
+
+	// Validate hostname format
+	if !isValidHostname(host) {
+		return "", fmt.Errorf("security policy violation: invalid hostname format for SNI: %s", host)
+	}
+
+	return host, nil
+}
+
+func isValidHostname(hostname string) bool {
+	if len(hostname) == 0 || len(hostname) > 253 {
+		return false
+	}
+	// Hostname cannot start or end with a hyphen
+	if hostname[0] == '-' || hostname[len(hostname)-1] == '-' {
+		return false
+	}
+	// Must contain at least one dot for FQDN
+	if !strings.Contains(hostname, ".") {
+		return false
+	}
+	return true
 }
 
 func buildQUICUTLSConfig(cfg *config.TLS, rootCAs *x509.CertPool) (*utls.Config, error) {
