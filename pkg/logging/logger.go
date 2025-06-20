@@ -1,4 +1,4 @@
-//go:generate mockgen -package=mocks -destination=../../mocks/mock_logger.go gocircum/pkg/logging Logger
+//go:generate mockgen -package=mocks -destination=../../mocks/mock_logger.go github.com/gocircum/gocircum/pkg/logging Logger
 
 package logging
 

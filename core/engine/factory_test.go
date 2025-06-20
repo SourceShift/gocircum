@@ -1,9 +1,9 @@
 package engine
 
 import (
-	"gocircum/core/config"
 	"testing"
 
+	"github.com/gocircum/gocircum/core/config"
 	"github.com/stretchr/testify/assert"
 )
 

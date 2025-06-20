@@ -1,8 +1,9 @@
 package testutils
 
 import (
-	"gocircum/pkg/logging"
 	"io"
+
+	"github.com/gocircum/gocircum/pkg/logging"
 
 	"go.uber.org/zap/zapcore"
 )

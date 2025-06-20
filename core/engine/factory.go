@@ -4,12 +4,13 @@ import (
 	"context"
 	"crypto/x509"
 	"fmt"
-	"gocircum/core/config"
-	"gocircum/core/constants"
-	"gocircum/core/transport"
-	"gocircum/pkg/logging"
 	"net"
 	"time"
+
+	"github.com/gocircum/gocircum/core/config"
+	"github.com/gocircum/gocircum/core/constants"
+	"github.com/gocircum/gocircum/core/transport"
+	"github.com/gocircum/gocircum/pkg/logging"
 
 	utls "github.com/refraction-networking/utls"
 )
@@ -21,7 +22,7 @@ var PopularUserAgents = []string{
 	"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4.1 Safari/605.1.15",
 }
 
-//go:generate mockgen -package=mocks -destination=../../mocks/mock_dialer_factory.go gocircum/core/engine DialerFactory
+//go:generate mockgen -package=mocks -destination=../../mocks/mock_dialer_factory.go github.com/gocircum/gocircum/core/engine DialerFactory
 
 // Dialer is a function that can establish a network connection.
 type Dialer func(ctx context.Context, network, addr string) (net.Conn, error)

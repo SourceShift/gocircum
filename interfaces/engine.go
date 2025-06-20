@@ -1,10 +1,11 @@
-//go:generate mockgen -package=mocks -destination=../mocks/mock_engine.go gocircum/interfaces Engine
+//go:generate mockgen -package=mocks -destination=../mocks/mock_engine.go github.com/gocircum/gocircum/interfaces Engine
 package interfaces
 
 import (
 	"context"
-	"gocircum/core/config"
-	"gocircum/core/ranker"
+
+	"github.com/gocircum/gocircum/core/config"
+	"github.com/gocircum/gocircum/core/ranker"
 )
 
 // Engine defines the public interface for the circumvention engine.

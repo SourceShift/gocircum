@@ -1,12 +1,14 @@
 package bridge_test
 
 import (
-	"gocircum/core/config"
-	"gocircum/mobile/bridge"
-	"gocircum/mocks"
-	"gocircum/testutils"
-	"sync"
 	"testing"
+
+	"sync"
+
+	"github.com/gocircum/gocircum/core/config"
+	"github.com/gocircum/gocircum/mobile/bridge"
+	"github.com/gocircum/gocircum/mocks"
+	"github.com/gocircum/gocircum/testutils"
 
 	"github.com/stretchr/testify/assert"
 	"go.uber.org/mock/gomock"

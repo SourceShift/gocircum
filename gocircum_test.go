@@ -2,10 +2,11 @@ package gocircum_test
 
 import (
 	"context"
-	"gocircum"
-	"gocircum/core/config"
 	"os"
 	"testing"
+
+	"github.com/gocircum/gocircum"
+	"github.com/gocircum/gocircum/core/config"
 )
 
 func TestEngineLifecycle(t *testing.T) {

@@ -1,4 +1,4 @@
-//go:generate mockgen -package=mocks -destination=../../mocks/mock_transport.go gocircum/core/transport Transport
+//go:generate mockgen -package=mocks -destination=../../mocks/mock_transport.go github.com/gocircum/gocircum/core/transport Transport
 
 package transport
 

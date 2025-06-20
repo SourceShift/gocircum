@@ -3,15 +3,16 @@ package ranker
 import (
 	"context"
 	"fmt"
-	"gocircum/core/config"
-	"gocircum/core/engine"
-	"gocircum/testutils"
-	"net"
-	"net/http"
-	"os"
 	"testing"
 	"time"
 
+	"net"
+	"net/http"
+	"os"
+
+	"github.com/gocircum/gocircum/core/config"
+	"github.com/gocircum/gocircum/core/engine"
+	"github.com/gocircum/gocircum/testutils"
 	"go.uber.org/mock/gomock"
 )
 

@@ -1,4 +1,4 @@
-module gocircum
+module github.com/gocircum/gocircum
 
 go 1.23.0
 

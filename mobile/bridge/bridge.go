@@ -1,4 +1,4 @@
-//go:generate mockgen -package=mocks -destination=../../mocks/mock_status_updater.go gocircum/mobile/bridge StatusUpdater
+//go:generate mockgen -package=mocks -destination=../../mocks/mock_status_updater.go github.com/gocircum/gocircum/mobile/bridge StatusUpdater
 
 // Package bridge provides a gomobile-compatible wrapper around the core gocircum library.
 package bridge
@@ -6,12 +6,14 @@ package bridge
 import (
 	"context"
 	"fmt"
-	"gocircum"
-	"gocircum/core/config"
-	"gocircum/interfaces"
-	"gocircum/pkg/logging"
 	"sync"
+
 	"time"
+
+	"github.com/gocircum/gocircum"
+	"github.com/gocircum/gocircum/core/config"
+	"github.com/gocircum/gocircum/interfaces"
+	"github.com/gocircum/gocircum/pkg/logging"
 
 	"gopkg.in/yaml.v3"
 )

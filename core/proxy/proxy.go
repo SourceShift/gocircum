@@ -2,10 +2,10 @@ package proxy
 
 import (
 	"fmt"
-	"gocircum/core/engine"
 	"net"
 
 	"github.com/armon/go-socks5"
+	"github.com/gocircum/gocircum/core/engine"
 )
 
 // CustomDialer is a function that can establish a network connection.

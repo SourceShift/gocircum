@@ -5,11 +5,12 @@ package gocircum
 import (
 	"context"
 	"fmt"
-	"gocircum/core"
-	"gocircum/core/config"
-	"gocircum/core/ranker"
-	"gocircum/interfaces"
-	"gocircum/pkg/logging"
+
+	"github.com/gocircum/gocircum/core"
+	"github.com/gocircum/gocircum/core/config"
+	"github.com/gocircum/gocircum/core/ranker"
+	"github.com/gocircum/gocircum/interfaces"
+	"github.com/gocircum/gocircum/pkg/logging"
 )
 
 // Engine represents the circumvention engine.
