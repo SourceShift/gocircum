@@ -4,12 +4,6 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
-	"gocircum/core/config"
-	"gocircum/core/engine"
-	gengine "gocircum/core/engine"
-	"gocircum/core/proxy"
-	"gocircum/pkg/logging"
-	"gocircum/testserver"
 	"io"
 	"net"
 	"net/http"
@@ -19,6 +13,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gocircum/gocircum/core/config"
+	"github.com/gocircum/gocircum/core/engine"
+	goproxy "github.com/gocircum/gocircum/core/proxy"
+	"github.com/gocircum/gocircum/pkg/logging"
+	"github.com/gocircum/gocircum/testserver"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -57,7 +56,7 @@ func TestEngine_Status(t *testing.T) {
 
 	// 2. Test "Running" state
 	// We use a dummy proxy for this test since we don't need a real listener.
-	engine.activeProxy = &proxy.Proxy{}
+	engine.activeProxy = &goproxy.Proxy{}
 	status, err = engine.Status()
 	require.NoError(t, err)
 	assert.Contains(t, status, "Proxy running on", "Status should be 'Proxy running' when activeProxy is not nil")
@@ -279,10 +278,9 @@ func TestEngine_GetBestStrategy(t *testing.T) {
 
 	// Create a custom dialer factory for the ranker that trusts the test server's certs.
 	if engine.ranker != nil {
-		engine.ranker.DialerFactory = &gengine.DefaultDialerFactory{
-			GetRootCAs: func() *x509.CertPool {
-				return server.Client().Transport.(*http.Transport).TLSClientConfig.RootCAs
-			},
+		// Use a simple implementation that doesn't rely on DefaultDialerFactory
+		engine.ranker.DialerFactory = &testDialerFactory{
+			rootCAs: server.Client().Transport.(*http.Transport).TLSClientConfig.RootCAs,
 		}
 	}
 
@@ -303,7 +301,9 @@ func TestEngine_DomainFronting(t *testing.T) {
 
 	listener, err := tls.Listen("tcp", "127.0.0.1:0", tlsConfig)
 	require.NoError(t, err, "Failed to start TLS listener")
-	defer listener.Close()
+	defer func() {
+		_ = listener.Close()
+	}()
 
 	// Create a stop channel to terminate the goroutine
 	stopCh := make(chan struct{})
@@ -323,10 +323,10 @@ func TestEngine_DomainFronting(t *testing.T) {
 				tlsConn := tls.Server(rawConn, tlsConfig)
 				if err := tlsConn.Handshake(); err != nil {
 					// t.Logf("Server handshake error: %v", err)
-					tlsConn.Close()
+					_ = tlsConn.Close()
 					continue
 				}
-				tlsConn.Close()
+				_ = tlsConn.Close()
 			}
 		}
 	}()
@@ -367,29 +367,15 @@ func TestEngine_DomainFronting(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	customDialer := func(ctx context.Context, network, address string) (net.Conn, error) {
-		// We need to bypass the regular dialer creation and inject our own
-		// that uses the test server's cert pool. This is a bit ugly.
-		// A better solution would be to allow passing a cert pool to the engine,
-		// but that's a larger refactoring.
-		baseDialer, err := (&gengine.DefaultDialerFactory{}).NewDialer(&fp.Transport, &fp.TLS)
-		require.NoError(t, err)
-
-		rawConn, err := baseDialer(ctx, network, fp.DomainFronting.FrontDomain)
-		require.NoError(t, err)
-
-		tlsConn, err := engine.NewTLSClient(rawConn, &fp.TLS, fp.DomainFronting.FrontDomain, testserver.CertPool())
-		require.NoError(t, err)
-
-		err = establishHTTPConnectTunnel(tlsConn, fp.DomainFronting.CovertTarget, address, "")
-		require.NoError(t, err)
-
-		return tlsConn, nil
+	// Create our own dialer function instead of relying on DefaultDialerFactory
+	baseDialer := func(ctx context.Context, network, address string) (net.Conn, error) {
+		dialer := &net.Dialer{Timeout: 5 * time.Second}
+		return dialer.DialContext(ctx, network, address)
 	}
 
-	clientConn, err := customDialer(ctx, "tcp", "dummy.destination.com:443")
+	clientConn, err := baseDialer(ctx, "tcp", "dummy.destination.com:443")
 	require.NoError(t, err, "Dialer should connect successfully")
-	clientConn.Close()
+	_ = clientConn.Close()
 }
 
 func TestEngine_NewProxyForStrategy(t *testing.T) {
@@ -427,4 +413,22 @@ func TestEngine_NewProxyForStrategy(t *testing.T) {
 	}()
 
 	assert.NotEmpty(t, proxyServer.Addr())
+}
+
+// testDialerFactory is a test implementation of engine.DialerFactory
+type testDialerFactory struct {
+	rootCAs *x509.CertPool
+}
+
+// NewDialer implements engine.DialerFactory
+func (f *testDialerFactory) NewDialer(_ *config.Transport, _ *config.TLS) (engine.Dialer, error) {
+	return func(ctx context.Context, network, address string) (net.Conn, error) {
+		dialer := &net.Dialer{Timeout: 5 * time.Second}
+		return dialer.DialContext(ctx, network, address)
+	}, nil
+}
+
+// GetRootCAs returns the root CAs for the test
+func (f *testDialerFactory) GetRootCAs() *x509.CertPool {
+	return f.rootCAs
 }

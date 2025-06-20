@@ -25,7 +25,7 @@ func TestTCPTransport_Dial(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to start test server: %v", err)
 	}
-	defer server.Close()
+	defer func() { _ = server.Close() }()
 
 	var wg sync.WaitGroup
 	wg.Add(1)
@@ -36,7 +36,7 @@ func TestTCPTransport_Dial(t *testing.T) {
 			t.Errorf("Server accept error: %v", err)
 			return
 		}
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 		if _, err := io.CopyN(conn, conn, 5); err != nil {
 			t.Errorf("Server copy error: %v", err)
 		}
@@ -55,7 +55,7 @@ func TestTCPTransport_Dial(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Dial failed: %v", err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	// Test the connection
 	msg := []byte("hello")
@@ -94,7 +94,7 @@ func TestTCPTransport_DialTLS(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to start TLS test server: %v", err)
 	}
-	defer server.Close()
+	defer func() { _ = server.Close() }()
 
 	var wg sync.WaitGroup
 	wg.Add(1)
@@ -105,7 +105,7 @@ func TestTCPTransport_DialTLS(t *testing.T) {
 			t.Errorf("Server accept error: %v", err)
 			return
 		}
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 		if _, err := io.CopyN(conn, conn, int64(len("hello tls"))); err != nil {
 			t.Errorf("Server copy error: %v", err)
 		}
@@ -128,7 +128,7 @@ func TestTCPTransport_DialTLS(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Dial failed: %v", err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	// Test the connection
 	msg := []byte("hello tls")
@@ -153,7 +153,7 @@ func BenchmarkTCPTransport_Dial(b *testing.B) {
 	if err != nil {
 		b.Fatalf("Failed to start test server: %v", err)
 	}
-	defer server.Close()
+	defer func() { _ = server.Close() }()
 	go func() {
 		for {
 			conn, err := server.Accept()
@@ -161,7 +161,7 @@ func BenchmarkTCPTransport_Dial(b *testing.B) {
 				return // server closed
 			}
 			go func(c net.Conn) {
-				defer c.Close()
+				defer func() { _ = c.Close() }()
 				// Read one byte and close, to complete the client's request
 				buf := make([]byte, 1)
 				if _, err := io.ReadFull(c, buf); err != nil {
@@ -190,7 +190,7 @@ func BenchmarkTCPTransport_Dial(b *testing.B) {
 			if _, err := conn.Write([]byte("a")); err != nil {
 				b.Logf("Write failed: %v", err)
 			}
-			conn.Close()
+			_ = conn.Close()
 		}
 	})
 }
@@ -272,7 +272,7 @@ func TestTCPTransportListenContextCancellation(t *testing.T) {
 
 	listener, err := transport.Listen(ctx, "tcp", "127.0.0.1:0")
 	assert.NoError(t, err)
-	defer listener.Close()
+	defer func() { _ = listener.Close() }()
 
 	var wg sync.WaitGroup
 	wg.Add(1)

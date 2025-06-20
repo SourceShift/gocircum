@@ -6,14 +6,15 @@ import (
 	"crypto/rand"
 	"crypto/x509"
 	"fmt"
-	"gocircum/core/config"
-	"gocircum/core/engine"
-	"gocircum/core/proxy"
-	"gocircum/core/ranker"
-	"gocircum/pkg/logging"
 	"net"
 	"net/http"
 	"sync"
+
+	"github.com/gocircum/gocircum/core/config"
+	"github.com/gocircum/gocircum/core/engine"
+	"github.com/gocircum/gocircum/core/proxy"
+	"github.com/gocircum/gocircum/core/ranker"
+	"github.com/gocircum/gocircum/pkg/logging"
 )
 
 // Engine is the main controller for the circumvention library.
@@ -224,7 +225,9 @@ func establishHTTPConnectTunnel(conn net.Conn, target, host string, userAgent st
 	if err != nil {
 		return fmt.Errorf("failed to read CONNECT response: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		_ = resp.Body.Close()
+	}()
 
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("proxy CONNECT request failed with status: %s", resp.Status)
@@ -271,7 +274,7 @@ func (e *Engine) createDomainFrontingDialer(fp *config.Fingerprint, dialer engin
 		// 4. Establish TLS, using the original hostname for SNI.
 		tlsConn, err := engine.NewUTLSClient(rawConn, &fp.TLS, frontHost, nil)
 		if err != nil {
-			rawConn.Close()
+			_ = rawConn.Close()
 			return nil, fmt.Errorf("failed to establish TLS with front domain: %w", err)
 		}
 
@@ -284,7 +287,7 @@ func (e *Engine) createDomainFrontingDialer(fp *config.Fingerprint, dialer engin
 		ua, _ := getRandomUserAgent()
 		err = establishHTTPConnectTunnel(tlsConn, address, hostHeader, ua)
 		if err != nil {
-			tlsConn.Close()
+			_ = tlsConn.Close()
 			return nil, fmt.Errorf("failed to establish CONNECT tunnel: %w", err)
 		}
 		return tlsConn, nil

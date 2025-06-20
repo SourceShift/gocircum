@@ -3,11 +3,11 @@ package engine
 import (
 	"crypto/x509"
 	"fmt"
-	"gocircum/core/config"
-	"gocircum/core/constants"
-	"gocircum/pkg/logging"
 	"net"
 
+	"github.com/gocircum/gocircum/core/config"
+	"github.com/gocircum/gocircum/core/constants"
+	"github.com/gocircum/gocircum/pkg/logging"
 	utls "github.com/refraction-networking/utls"
 )
 
@@ -38,7 +38,7 @@ func NewTLSClient(conn net.Conn, cfg *config.TLS, serverName string, rootCAs *x5
 		// Set a default for uTLS if it's not configured, but make it explicit.
 		// This might require modifying the config passed in or having a more robust default logic.
 		// For now, we'll return an error to force explicit configuration or better defaults.
-		return nil, fmt.Errorf("unsupported or unspecified TLS library: %s. Must be 'utls' or 'uquic' for client. 'go-stdlib' is deprecated for circumvention.", cfg.Library)
+		return nil, fmt.Errorf("unsupported or unspecified TLS library: %s. Must be 'utls' or 'uquic' for client. 'go-stdlib' is deprecated for circumvention", cfg.Library)
 	}
 }
 

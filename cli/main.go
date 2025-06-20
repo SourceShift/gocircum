@@ -4,13 +4,14 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"gocircum/core"
-	"gocircum/core/config"
-	"gocircum/pkg/logging"
 	"os"
 	"os/signal"
 	"syscall"
 	"text/tabwriter"
+
+	"github.com/gocircum/gocircum/core"
+	"github.com/gocircum/gocircum/core/config"
+	"github.com/gocircum/gocircum/pkg/logging"
 )
 
 func main() {
@@ -145,13 +146,13 @@ func runTest(configFile string) {
 	}
 
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 3, ' ', 0)
-	fmt.Fprintln(w, "ID\tSUCCESS\tLATENCY\tDESCRIPTION")
+	_, _ = fmt.Fprintln(w, "ID\tSUCCESS\tLATENCY\tDESCRIPTION")
 	for _, res := range results {
 		status := "FAIL"
 		if res.Success {
 			status = "OK"
 		}
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", res.Fingerprint.ID, status, res.Latency, res.Fingerprint.Description)
+		_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", res.Fingerprint.ID, status, res.Latency, res.Fingerprint.Description)
 	}
-	w.Flush()
+	_ = w.Flush()
 }

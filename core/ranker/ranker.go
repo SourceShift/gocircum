@@ -5,15 +5,17 @@ import (
 	"context"
 	"crypto/rand"
 	"fmt"
-	"gocircum/core/config"
-	"gocircum/core/engine"
-	"gocircum/core/proxy"
-	"gocircum/pkg/logging"
-	"net"
 	"sort"
-	"strings"
 	"sync"
 	"time"
+
+	"net"
+	"strings"
+
+	"github.com/gocircum/gocircum/core/config"
+	"github.com/gocircum/gocircum/core/engine"
+	"github.com/gocircum/gocircum/core/proxy"
+	"github.com/gocircum/gocircum/pkg/logging"
 )
 
 var commonUserAgents = []string{
@@ -189,7 +191,9 @@ func (r *Ranker) testStrategy(ctx context.Context, fingerprint *config.Fingerpri
 	if err != nil {
 		return false, 0, err
 	}
-	defer conn.Close()
+	defer func() {
+		_ = conn.Close()
+	}()
 	latency := time.Since(start)
 
 	// HARDENED LIVENESS CHECK: Perform a padded and fragmented HTTP GET to verify application data flow.

@@ -71,19 +71,19 @@ type zapLogger struct {
 }
 
 func (l *zapLogger) Debug(msg string, keysAndValues ...interface{}) {
-	l.SugaredLogger.Debugw(msg, keysAndValues...)
+	l.Debugw(msg, keysAndValues...)
 }
 
 func (l *zapLogger) Info(msg string, keysAndValues ...interface{}) {
-	l.SugaredLogger.Infow(msg, keysAndValues...)
+	l.Infow(msg, keysAndValues...)
 }
 
 func (l *zapLogger) Warn(msg string, keysAndValues ...interface{}) {
-	l.SugaredLogger.Warnw(msg, keysAndValues...)
+	l.Warnw(msg, keysAndValues...)
 }
 
 func (l *zapLogger) Error(msg string, keysAndValues ...interface{}) {
-	l.SugaredLogger.Errorw(msg, keysAndValues...)
+	l.Errorw(msg, keysAndValues...)
 }
 
 // With creates a child logger and adds structured context to it.
