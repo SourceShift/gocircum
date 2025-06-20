@@ -73,7 +73,8 @@ func NewRanker(logger logging.Logger, dohProviders []config.DoHProvider) (*Ranke
 	}
 	dohResolver, err := proxy.NewDoHResolver(dohProviders)
 	if err != nil {
-		return nil, fmt.Errorf("failed to initialize DoH resolver for ranker: %w", err)
+		logger.Error("failed to initialize DoH resolver for ranker", "error", err)
+		return nil, fmt.Errorf("ranker initialization failed")
 	}
 	return &Ranker{
 		ActiveProbes:  list.New(),
@@ -108,7 +109,8 @@ func (r *Ranker) TestAndRank(ctx context.Context, fingerprints []*config.Fingerp
 		for i := len(shuffledFingerprints) - 1; i > 0; i-- {
 			j, err := engine.CryptoRandInt(0, i)
 			if err != nil {
-				return nil, fmt.Errorf("failed to randomize test order: %w", err)
+				r.Logger.Error("failed to randomize test order", "error", err)
+				return nil, fmt.Errorf("test setup failed")
 			}
 			shuffledFingerprints[i], shuffledFingerprints[j] = shuffledFingerprints[j], shuffledFingerprints[i]
 		}
@@ -328,7 +330,7 @@ func (r *Ranker) writeRealisticTLSPattern(conn net.Conn, data []byte) {
 // testStrategy performs a single connection test, including an application-layer data exchange.
 func (r *Ranker) testStrategy(ctx context.Context, fingerprint *config.Fingerprint, canaryDomains []string) (bool, time.Duration, error) {
 	if len(canaryDomains) == 0 {
-		return false, 0, fmt.Errorf("no canary domains provided")
+		return false, 0, fmt.Errorf("misconfiguration: no canary domains")
 	}
 
 	// Use expanded, rotating canary domain set to avoid predictable patterns
@@ -336,7 +338,8 @@ func (r *Ranker) testStrategy(ctx context.Context, fingerprint *config.Fingerpri
 
 	domainIndex, err := engine.CryptoRandInt(0, len(expandedDomains)-1)
 	if err != nil {
-		return false, 0, fmt.Errorf("failed to select random canary domain: %w", err)
+		r.Logger.Error("failed to select random canary domain", "error", err)
+		return false, 0, fmt.Errorf("test failed: internal error")
 	}
 	domainToTest := expandedDomains[domainIndex]
 
@@ -345,11 +348,13 @@ func (r *Ranker) testStrategy(ctx context.Context, fingerprint *config.Fingerpri
 		// Add timing jitter to break correlation patterns
 		baseJitter, err := engine.CryptoRandInt(500, 2000) // 0.5-2 second base delay
 		if err != nil {
-			return false, 0, fmt.Errorf("CSPRNG failure for base jitter generation: %w", err)
+			r.Logger.Error("CSPRNG failure for base jitter generation", "error", err)
+			return false, 0, fmt.Errorf("test failed: internal error")
 		}
 		microJitter, err := engine.CryptoRandInt(0, 100) // 0-100ms micro adjustment
 		if err != nil {
-			return false, 0, fmt.Errorf("CSPRNG failure for micro jitter generation: %w", err)
+			r.Logger.Error("CSPRNG failure for micro jitter generation", "error", err)
+			return false, 0, fmt.Errorf("test failed: internal error")
 		}
 		totalJitter := time.Duration(baseJitter)*time.Millisecond + time.Duration(microJitter)*time.Millisecond
 		time.Sleep(totalJitter)
@@ -369,7 +374,7 @@ func (r *Ranker) testStrategy(ctx context.Context, fingerprint *config.Fingerpri
 	_, resolvedIP, err = r.DoHResolver.Resolve(ctx, hostToResolve)
 	if err != nil {
 		r.Logger.Warn("Failed to securely resolve canary domain for testing", "domain", hostToResolve, "error", err)
-		return false, 0, fmt.Errorf("failed to securely resolve canary domain '%s': %w", hostToResolve, err)
+		return false, 0, fmt.Errorf("test failed: domain resolution")
 	}
 
 	// The address we dial is the resolved IP and the original port.
@@ -406,16 +411,19 @@ func (r *Ranker) testStrategy(ctx context.Context, fingerprint *config.Fingerpri
 
 	paddingHeaders, err := engine.CryptoRandInt(2, 5)
 	if err != nil {
-		return false, 0, fmt.Errorf("CSPRNG failure for padding header count: %w", err)
+		r.Logger.Error("CSPRNG failure for padding header count", "error", err)
+		return false, 0, fmt.Errorf("test failed: internal error")
 	}
 	for i := 0; i < int(paddingHeaders); i++ {
 		keyBytes := make([]byte, 8)
 		valBytes := make([]byte, 16)
 		if _, err := rand.Read(keyBytes); err != nil {
-			return false, 0, fmt.Errorf("CSPRNG failure for padding key generation: %w", err)
+			r.Logger.Error("CSPRNG failure for padding key generation", "error", err)
+			return false, 0, fmt.Errorf("test failed: internal error")
 		}
 		if _, err := rand.Read(valBytes); err != nil {
-			return false, 0, fmt.Errorf("CSPRNG failure for padding value generation: %w", err)
+			r.Logger.Error("CSPRNG failure for padding value generation", "error", err)
+			return false, 0, fmt.Errorf("test failed: internal error")
 		}
 		requestBuilder.WriteString(fmt.Sprintf("X-Padding-%x: %x\r\n", keyBytes, valBytes))
 	}
@@ -434,7 +442,8 @@ func (r *Ranker) testStrategy(ctx context.Context, fingerprint *config.Fingerpri
 		}
 
 		if _, err := conn.Write(requestBytes[offset : offset+chunkSize]); err != nil {
-			return false, 0, fmt.Errorf("failed to write fragmented GET to canary: %w", err)
+			r.Logger.Warn("failed to write to canary", "error", err)
+			return false, 0, fmt.Errorf("test failed: connection write")
 		}
 		offset += chunkSize
 
@@ -450,7 +459,8 @@ func (r *Ranker) testStrategy(ctx context.Context, fingerprint *config.Fingerpri
 	if _, err := conn.Read(responseBuf); err != nil {
 		// Ignore "close" and EOF errors which are expected in a short-lived test connection.
 		if !strings.Contains(err.Error(), "closed") && !strings.Contains(err.Error(), "EOF") {
-			return false, 0, fmt.Errorf("failed to read from canary connection: %w", err)
+			r.Logger.Warn("failed to read from canary", "error", err)
+			return false, 0, fmt.Errorf("test failed: connection read")
 		}
 	}
 
