@@ -34,3 +34,7 @@ tasks/
 scripts
 repomix*
 coverage.out
+
+
+#Ignore cursor AI rules
+.cursor/rules/codacy.mdc

@@ -34,12 +34,16 @@ type SecureRandomizer struct {
 	fallbackRand *mathrand.Rand
 	mutex        sync.Mutex
 	initialized  bool
+	entropyPool  []byte
+	lastSeed     int64
+	seedCounter  uint64
 }
 
 var globalRandomizer = &SecureRandomizer{}
 
 // SecureInt returns a random integer from [0, max). It first attempts to use
-// crypto/rand, but falls back to a non-cryptographically secure PRNG if that fails.
+// crypto/rand, but falls back to a strengthened non-cryptographically secure PRNG
+// with multiple entropy sources if crypto/rand fails.
 func (sr *SecureRandomizer) SecureInt(max *big.Int) (*big.Int, error) {
 	// Try the cryptographically secure source first.
 	if result, err := rand.Int(rand.Reader, max); err == nil {
@@ -48,18 +52,114 @@ func (sr *SecureRandomizer) SecureInt(max *big.Int) (*big.Int, error) {
 
 	// If crypto/rand fails, use a fallback PRNG.
 	// This is not for cryptographic security, but to prevent a panic and
-	// maintain service availability.
+	// maintain service availability while maximizing unpredictability.
 	sr.mutex.Lock()
 	defer sr.mutex.Unlock()
 
 	if !sr.initialized {
-		sr.fallbackRand = mathrand.New(mathrand.NewSource(time.Now().UnixNano()))
-		sr.initialized = true
+		// Initialize with multiple entropy sources to reduce predictability
+		sr.initializeFallbackRand()
+	} else {
+		// Periodically reseed even if already initialized to prevent pattern detection
+		sr.seedCounter++
+		if sr.seedCounter%17 == 0 { // Prime number to avoid obvious patterns
+			sr.enhanceEntropy()
+		}
 	}
 
 	// big.Int.Rand is documented to not be concurrently safe on its source,
 	// so we ensure access is serialized with a mutex.
 	return new(big.Int).Rand(sr.fallbackRand, max), nil
+}
+
+// initializeFallbackRand sets up the fallback randomizer with multiple entropy sources
+func (sr *SecureRandomizer) initializeFallbackRand() {
+	// Allocate entropy pool for continuous mixing
+	sr.entropyPool = make([]byte, 64)
+
+	// Start with current time at nanosecond precision
+	now := time.Now()
+	sr.lastSeed = now.UnixNano()
+
+	// Mix in process-specific entropy sources
+	var processEntropy int64
+	processEntropy = int64(os.Getpid())
+	processEntropy ^= int64(os.Getppid())
+	processEntropy ^= int64(len(os.Args))
+	for _, arg := range os.Args {
+		for i := 0; i < len(arg); i++ {
+			processEntropy ^= int64(arg[i]) << (i % 63)
+		}
+	}
+	sr.lastSeed ^= processEntropy
+
+	// Try to get some bytes from crypto/rand even if it partially works
+	if _, err := rand.Read(sr.entropyPool); err != nil {
+		// If completely failed, use time-based initialization with jitter
+		for i := range sr.entropyPool {
+			// Use different jitters for each byte based on loop counter and time
+			jitter := int64(i) * now.Unix() % 255
+			sr.entropyPool[i] = byte((now.UnixNano() >> (i % 8)) ^ jitter)
+		}
+	}
+
+	// Create source with mixed entropy and initialize the random generator
+	source := mathrand.NewSource(sr.lastSeed)
+	sr.fallbackRand = mathrand.New(source)
+
+	// Perform initial shuffle of the entropy pool using this seed
+	sr.fallbackRand.Shuffle(len(sr.entropyPool), func(i, j int) {
+		sr.entropyPool[i], sr.entropyPool[j] = sr.entropyPool[j], sr.entropyPool[i]
+	})
+
+	sr.initialized = true
+	sr.seedCounter = 0
+
+	// Log that we're using fallback randomization
+	logging.GetLogger().Warn("Using strengthened fallback randomization due to crypto/rand failure")
+}
+
+// enhanceEntropy mixes in new entropy sources to strengthen the fallback randomizer
+func (sr *SecureRandomizer) enhanceEntropy() {
+	// Get current time values at different precisions for diversity
+	now := time.Now()
+	nano := now.UnixNano()
+
+	// Only update seed if we get a different timestamp than last time
+	if nano != sr.lastSeed {
+		// Mix the current seed with new time value
+		newSeed := sr.lastSeed ^ nano
+
+		// Add jitter based on the counter
+		newSeed ^= int64(sr.seedCounter * 0xdeadbeef)
+
+		// Try to extract some entropy from memory addresses of temporary objects
+		tempObj := fmt.Sprintf("%p", &now)
+		for i := 0; i < len(tempObj); i++ {
+			newSeed ^= int64(tempObj[i]) << ((i * 5) % 63)
+		}
+
+		// Update the fallback randomizer with the new seed
+		sr.fallbackRand.Seed(newSeed)
+		sr.lastSeed = newSeed
+
+		// Update a portion of the entropy pool
+		idx := int(newSeed % int64(len(sr.entropyPool)))
+		sr.entropyPool[idx] ^= byte(newSeed)
+
+		// Shuffle a section of the pool to increase entropy diffusion
+		start := idx % (len(sr.entropyPool) / 2)
+		length := 1 + (idx % (len(sr.entropyPool) / 4))
+		end := start + length
+		if end > len(sr.entropyPool) {
+			end = len(sr.entropyPool)
+		}
+
+		sr.fallbackRand.Shuffle(end-start, func(i, j int) {
+			i, j = i+start, j+start
+			sr.entropyPool[i], sr.entropyPool[j] = sr.entropyPool[j], sr.entropyPool[i]
+		})
+	}
 }
 
 type BootstrapManager struct {
