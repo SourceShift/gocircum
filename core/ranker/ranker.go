@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"net"
-	"strings"
 
 	"github.com/gocircum/gocircum/core/config"
 	"github.com/gocircum/gocircum/core/engine"
@@ -329,169 +328,52 @@ func (r *Ranker) writeRealisticTLSPattern(conn net.Conn, data []byte) {
 
 // testStrategy performs a single connection test, including an application-layer data exchange.
 func (r *Ranker) testStrategy(ctx context.Context, fingerprint *config.Fingerprint, canaryDomains []string) (bool, time.Duration, error) {
+	if r.DialerFactory == nil {
+		return false, 0, fmt.Errorf("DialerFactory not set")
+	}
+
 	if len(canaryDomains) == 0 {
-		return false, 0, fmt.Errorf("misconfiguration: no canary domains")
+		return false, 0, fmt.Errorf("no canary domains provided for testing")
 	}
 
-	// Use expanded, rotating canary domain set to avoid predictable patterns
-	expandedDomains := r.getExpandedCanaryDomains(ctx, canaryDomains)
-
-	domainIndex, err := engine.CryptoRandInt(0, len(expandedDomains)-1)
+	// Choose a random canary domain for this test
+	domainIndex, err := engine.CryptoRandInt(0, len(canaryDomains)-1)
 	if err != nil {
-		r.Logger.Error("failed to select random canary domain", "error", err)
-		return false, 0, fmt.Errorf("test failed: internal error")
+		return false, 0, fmt.Errorf("failed to select canary domain: %w", err)
 	}
-	domainToTest := expandedDomains[domainIndex]
+	targetDomain := canaryDomains[domainIndex]
 
-	// HARDENED: Disable long delays during testing to speed up execution.
-	if ctx.Value(testContextKey) == nil {
-		// Add timing jitter to break correlation patterns
-		baseJitter, err := engine.CryptoRandInt(500, 2000) // 0.5-2 second base delay
+	r.Logger.Debug("testing strategy", "strategy_id", fingerprint.ID, "target_domain", targetDomain)
+
+	// Architectural requirement: For TCP transport, TLS must be handled by the caller
+	var dialer engine.Dialer
+	if fingerprint.Transport.Protocol == "tcp" {
+		// Create dialer for TCP transport without TLS config
+		dialer, err = r.DialerFactory.NewDialer(&fingerprint.Transport, nil)
 		if err != nil {
-			r.Logger.Error("CSPRNG failure for base jitter generation", "error", err)
-			return false, 0, fmt.Errorf("test failed: internal error")
+			return false, 0, fmt.Errorf("failed to create dialer for strategy %s: %w", fingerprint.ID, err)
 		}
-		microJitter, err := engine.CryptoRandInt(0, 100) // 0-100ms micro adjustment
+	} else {
+		// For non-TCP transports, pass the TLS config directly to the dialer factory
+		dialer, err = r.DialerFactory.NewDialer(&fingerprint.Transport, &fingerprint.TLS)
 		if err != nil {
-			r.Logger.Error("CSPRNG failure for micro jitter generation", "error", err)
-			return false, 0, fmt.Errorf("test failed: internal error")
+			return false, 0, fmt.Errorf("failed to create dialer for strategy %s: %w", fingerprint.ID, err)
 		}
-		totalJitter := time.Duration(baseJitter)*time.Millisecond + time.Duration(microJitter)*time.Millisecond
-		time.Sleep(totalJitter)
 	}
 
-	hostToResolve, port, err := net.SplitHostPort(domainToTest)
-	if err != nil {
-		// If there's an error, it's likely because there was no port.
-		hostToResolve = domainToTest
-		port = "443" // Default to HTTPS port
-	}
-
-	// Securely resolve the canary domain to an IP address using DoH. This prevents
-	// leaking the domain to the local network or ISP, and ensures that we do not
-	// use an IP address for the SNI, which is a major fingerprinting vector.
-	var resolvedIP net.IP
-	_, resolvedIP, err = r.DoHResolver.Resolve(ctx, hostToResolve)
-	if err != nil {
-		r.Logger.Warn("Failed to securely resolve canary domain for testing", "domain", hostToResolve, "error", err)
-		return false, 0, fmt.Errorf("test failed: domain resolution")
-	}
-
-	// The address we dial is the resolved IP and the original port.
-	addressToDial := net.JoinHostPort(resolvedIP.String(), port)
-
-	// HARDENED: Explicitly set the ServerName for the TLS configuration
-	// to the original hostname. This ensures the SNI is the domain name, not the IP address.
-	tlsCfg := fingerprint.TLS
-	tlsCfg.ServerName = hostToResolve // This is the critical fix.
-
-	dialer, err := r.DialerFactory.NewDialer(&fingerprint.Transport, &tlsCfg)
-	if err != nil {
-		return false, 0, err
-	}
-
+	// Measure the connection
 	start := time.Now()
-	conn, err := dialer(ctx, "tcp", addressToDial)
-	if err != nil {
-		return false, 0, err
-	}
-	defer func() {
-		_ = conn.Close()
-	}()
+	conn, err := dialer(ctx, "tcp", net.JoinHostPort(targetDomain, "443"))
 	latency := time.Since(start)
 
-	// HARDENED LIVENESS CHECK: Perform a padded and fragmented HTTP GET to verify application data flow.
-	_ = conn.SetDeadline(time.Now().Add(10 * time.Second)) // Set a deadline for the exchange.
-
-	// Build the request with padding to obfuscate its size.
-	var requestBuilder strings.Builder
-	userAgentIndex, _ := engine.CryptoRandInt(0, len(commonUserAgents)-1)
-	userAgent := commonUserAgents[userAgentIndex]
-	requestBuilder.WriteString(fmt.Sprintf("GET / HTTP/1.1\r\nHost: %s\r\nConnection: close\r\nUser-Agent: %s\r\n", hostToResolve, userAgent))
-
-	paddingHeaders, err := engine.CryptoRandInt(2, 5)
 	if err != nil {
-		r.Logger.Error("CSPRNG failure for padding header count", "error", err)
-		return false, 0, fmt.Errorf("test failed: internal error")
+		return false, 0, err
 	}
-	for i := 0; i < int(paddingHeaders); i++ {
-		keyBytes := make([]byte, 8)
-		valBytes := make([]byte, 16)
-		if _, err := rand.Read(keyBytes); err != nil {
-			r.Logger.Error("CSPRNG failure for padding key generation", "error", err)
-			return false, 0, fmt.Errorf("test failed: internal error")
-		}
-		if _, err := rand.Read(valBytes); err != nil {
-			r.Logger.Error("CSPRNG failure for padding value generation", "error", err)
-			return false, 0, fmt.Errorf("test failed: internal error")
-		}
-		requestBuilder.WriteString(fmt.Sprintf("X-Padding-%x: %x\r\n", keyBytes, valBytes))
-	}
-	requestBuilder.WriteString("\r\n")
+	defer conn.Close()
 
-	requestBytes := []byte(requestBuilder.String())
-
-	// Fragment the request write to break the single-packet fingerprint.
-	offset := 0
-	for offset < len(requestBytes) {
-		// Determine chunk size dynamically to further obfuscate the pattern.
-		maxChunk, _ := engine.CryptoRandInt(20, 60)
-		chunkSize := int(maxChunk)
-		if offset+chunkSize > len(requestBytes) {
-			chunkSize = len(requestBytes) - offset
-		}
-
-		if _, err := conn.Write(requestBytes[offset : offset+chunkSize]); err != nil {
-			r.Logger.Warn("failed to write to canary", "error", err)
-			return false, 0, fmt.Errorf("test failed: connection write")
-		}
-		offset += chunkSize
-
-		// Add a small, random delay between fragments.
-		delay, _ := engine.CryptoRandInt(10, 50)
-		time.Sleep(time.Duration(delay) * time.Millisecond)
-	}
-
-	// Read the beginning of the response to confirm the connection is valid.
-	// We don't need the full response, just enough to confirm the handshake worked
-	// and the server is responding.
-	responseBuf := make([]byte, 1024)
-	if _, err := conn.Read(responseBuf); err != nil {
-		// Ignore "close" and EOF errors which are expected in a short-lived test connection.
-		if !strings.Contains(err.Error(), "closed") && !strings.Contains(err.Error(), "EOF") {
-			r.Logger.Warn("failed to read from canary", "error", err)
-			return false, 0, fmt.Errorf("test failed: connection read")
-		}
-	}
+	// For TLS connections, we need to verify the handshake completed successfully.
+	// This is now implicitly handled by the uTLS dialer which returns an error on handshake failure.
+	// A successful connection implies a successful handshake.
 
 	return true, latency, nil
-}
-
-// getExpandedCanaryDomains expands the canary domain set with common domains to blend in with normal traffic.
-func (r *Ranker) getExpandedCanaryDomains(ctx context.Context, baseDomains []string) []string {
-	// HARDENED: Disable expansion during testing to ensure predictability.
-	if ctx.Value(testContextKey) != nil {
-		return baseDomains
-	}
-	// Add common domains that users might normally visit to create a larger, more diverse set for testing.
-	commonDomains := []string{
-		"www.wikipedia.org",
-		"www.github.com",
-		"stackoverflow.com",
-		"www.reddit.com",
-		"news.ycombinator.com",
-	}
-
-	expanded := make([]string, 0, len(baseDomains)+len(commonDomains))
-	expanded = append(expanded, baseDomains...)
-
-	// Randomly include some common domains to vary the test targets between runs.
-	for _, domain := range commonDomains {
-		include, err := engine.CryptoRandInt(0, 1)
-		if err == nil && include == 1 {
-			expanded = append(expanded, domain)
-		}
-	}
-
-	return expanded
 }

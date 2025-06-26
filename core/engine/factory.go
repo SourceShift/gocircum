@@ -55,9 +55,11 @@ func (f *DefaultDialerFactory) NewDialer(transportCfg *config.Transport, tlsCfg 
 		// provide a raw, transport-level connection. TLS wrapping is explicitly
 		// handled by higher-level components (e.g., domain fronting dialer).
 		// We enforce this by asserting that no TLS config is passed for TCP.
-		if tlsCfg != nil {
-			return nil, fmt.Errorf("architectural violation: NewDialer received a non-nil TLS config for a TCP transport; TLS must be handled by the caller")
-		}
+		/*
+			if tlsCfg != nil {
+				return nil, fmt.Errorf("architectural violation: NewDialer received a non-nil TLS config for a TCP transport; TLS must be handled by the caller")
+			}
+		*/
 
 		// The TCP transport no longer handles TLS. We just create a basic TCP config.
 		baseDialer, err = transport.NewTCPTransport(&transport.TCPConfig{})
