@@ -38,3 +38,6 @@ coverage.out
 
 #Ignore cursor AI rules
 .cursor/rules/codacy.mdc
+
+# New directory
+/bin/

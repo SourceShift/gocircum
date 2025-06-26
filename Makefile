@@ -8,11 +8,11 @@ GOMOBILE=gomobile
 GOLINT=golangci-lint
 
 # Project paths
-CLI_DIR=./cmd/heybabe-cli
+CLI_DIR=./cli
 MOBILE_PKG=./mobile
 BUILD_DIR=./build
 BIN_DIR=./bin
-CLI_OUTPUT=$(BIN_DIR)/heybabe-cli
+CLI_OUTPUT=$(BIN_DIR)/gocircum-cli
 
 # Default target runs the build for all artifacts
 .PHONY: all
@@ -26,7 +26,7 @@ help:
 	@echo "Targets:"
 	@echo "  all              Build all artifacts (CLI and mobile libraries)"
 	@echo "  install-deps     Install Go mobile and linter dependencies"
-	@echo "  build-cli        Build the heybabe-cli application"
+	@echo "  build-cli        Build the gocircum-cli application"
 	@echo "  build-mobile     Build mobile libraries for iOS and Android"
 	@echo "  android          Build the Android .aar library"
 	@echo "  ios              Build the iOS .xcframework"
@@ -48,7 +48,7 @@ install-deps:
 # Build targets
 .PHONY: build-cli
 build-cli:
-	@echo "Building heybabe-cli..."
+	@echo "Building gocircum-cli..."
 	@mkdir -p $(BIN_DIR)
 	$(GOBUILD) -o $(CLI_OUTPUT) $(CLI_DIR)
 

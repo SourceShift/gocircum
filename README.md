@@ -5,7 +5,7 @@
 </p>
 
 [![Build Status](https://img.shields.io/github/actions/workflow/status/SourceShift/gocircum/main.yml?branch=main)](https://github.com/SourceShift/gocircum/actions/workflows/main.yml)
-[![Go Report Card](https://img.shields.io/go/report-card/github.com/SourceShift/gocircum)](https://goreportcard.com/report/github.com/SourceShift/gocircum)
+[![golangci-lint](https://img.shields.io/github/actions/workflow/status/SourceShift/gocircum/lint.yml?branch=main&label=lint)](https://github.com/SourceShift/gocircum/actions/workflows/lint.yml)
 [![codecov](https://codecov.io/gh/SourceShift/gocircum/branch/main/graph/badge.svg?token=E6QKRQJHXY)](https://codecov.io/gh/SourceShift/gocircum)
 [![license](https://img.shields.io/github/license/SourceShift/gocircum)](https://github.com/SourceShift/gocircum/blob/master/LICENSE)
 [![GitHub Release](https://img.shields.io/github/v/release/SourceShift/gocircum?label=Release)](https://github.com/SourceShift/gocircum/releases)

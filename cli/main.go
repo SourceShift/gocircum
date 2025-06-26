@@ -14,51 +14,78 @@ import (
 	"github.com/gocircum/gocircum/pkg/logging"
 )
 
+func printUsage(globalFlags *flag.FlagSet) {
+	fmt.Fprintf(os.Stderr, "Usage: gocircum-cli [global options] <command> [command options]\n\n")
+	fmt.Fprintf(os.Stderr, "A modular and adaptable censorship circumvention framework.\n\n")
+	fmt.Fprintf(os.Stderr, "Global Options:\n")
+	globalFlags.SetOutput(os.Stderr)
+	globalFlags.PrintDefaults()
+	fmt.Fprintf(os.Stderr, "\nCommands:\n")
+	fmt.Fprintf(os.Stderr, "  proxy    Run the SOCKS5 proxy\n")
+	fmt.Fprintf(os.Stderr, "  test     Test the configured strategies\n")
+}
+
 func main() {
-	// Manually parse global flags for logging, as they are needed before subcommands.
-	var logLevel, logFormat string
-	fs := flag.NewFlagSet("global", flag.ContinueOnError)
-	fs.StringVar(&logLevel, "log-level", "info", "Log level (debug, info, warn, error)")
-	fs.StringVar(&logFormat, "log-format", "console", "Log format (console, json)")
-	// Ignore errors, we'll just use defaults if flags are not there.
-	_ = fs.Parse(os.Args)
+	// Define and parse global flags. Parsing will stop at the first non-flag argument.
+	globalFlags := flag.NewFlagSet("gocircum-cli", flag.ExitOnError)
+	globalFlags.Usage = func() { printUsage(globalFlags) }
+	logLevel := globalFlags.String("log-level", "info", "Log level (debug, info, warn, error)")
+	logFormat := globalFlags.String("log-format", "console", "Log format (console, json)")
 
-	logging.InitLogger(logLevel, logFormat, nil)
+	// Parse global flags from the beginning of the arguments.
+	// The flag package stops parsing at the first non-flag argument.
+	// Use ContinueOnError to prevent exit on error, so we can show custom help.
+	if err := globalFlags.Parse(os.Args[1:]); err == flag.ErrHelp {
+		// The flag package's default help was printed. We can exit now.
+		os.Exit(0)
+	}
 
-	if len(os.Args) < 2 {
+	// Initialize logger right after parsing global flags.
+	logging.InitLogger(*logLevel, *logFormat, nil)
+
+	// The remaining arguments are the subcommand and its own flags.
+	args := globalFlags.Args()
+	if len(args) == 0 {
 		logging.GetLogger().Error("expected 'proxy' or 'test' subcommands")
+		printUsage(globalFlags)
 		os.Exit(1)
 	}
 
-	switch os.Args[1] {
+	command := args[0]
+	commandArgs := args[1:]
+
+	switch command {
 	case "proxy":
 		proxyCmd := flag.NewFlagSet("proxy", flag.ExitOnError)
 		addr := proxyCmd.String("addr", "", "proxy listen address (e.g., 127.0.0.1:1080). If empty, uses config or a random port.")
 		strategyID := proxyCmd.String("strategy", "", "Specific strategy ID to use. If not provided, the best ranked strategy will be used.")
 		configFile := proxyCmd.String("config", "strategies.yaml", "Path to the strategies YAML file.")
-		// Add logging flags to help text, but they are handled globally.
-		proxyCmd.String("log-level", "info", "Log level (debug, info, warn, error)")
-		proxyCmd.String("log-format", "console", "Log format (console, json)")
-		if err := proxyCmd.Parse(os.Args[2:]); err != nil {
-			logging.GetLogger().Error("Failed to parse proxy flags", "error", err)
-			os.Exit(1)
+		proxyCmd.Usage = func() {
+			fmt.Fprintf(proxyCmd.Output(), "Usage: gocircum-cli proxy [options]\n\n")
+			fmt.Fprintf(proxyCmd.Output(), "Runs the SOCKS5 proxy.\n\nOptions:\n")
+			proxyCmd.PrintDefaults()
+		}
+		if err := proxyCmd.Parse(commandArgs); err != nil {
+			os.Exit(1) // ExitOnError should have already handled this.
 		}
 		runProxy(*addr, *strategyID, *configFile)
 
 	case "test":
 		testCmd := flag.NewFlagSet("test", flag.ExitOnError)
 		configFile := testCmd.String("config", "strategies.yaml", "Path to the strategies YAML file.")
-		// Add logging flags to help text, but they are handled globally.
-		testCmd.String("log-level", "info", "Log level (debug, info, warn, error)")
-		testCmd.String("log-format", "console", "Log format (console, json)")
-		if err := testCmd.Parse(os.Args[2:]); err != nil {
-			logging.GetLogger().Error("Failed to parse test flags", "error", err)
-			os.Exit(1)
+		testCmd.Usage = func() {
+			fmt.Fprintf(testCmd.Output(), "Usage: gocircum-cli test [options]\n\n")
+			fmt.Fprintf(testCmd.Output(), "Tests the configured strategies.\n\nOptions:\n")
+			testCmd.PrintDefaults()
+		}
+		if err := testCmd.Parse(commandArgs); err != nil {
+			os.Exit(1) // ExitOnError should have already handled this.
 		}
 		runTest(*configFile)
 
 	default:
-		logging.GetLogger().Error("expected 'proxy' or 'test' subcommands", "command", os.Args[1])
+		logging.GetLogger().Error("unknown command", "command", command)
+		printUsage(globalFlags)
 		os.Exit(1)
 	}
 }
