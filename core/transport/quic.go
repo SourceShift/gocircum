@@ -2,8 +2,10 @@ package transport
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
 	"fmt"
+	"math/big"
 	"net"
 	"time"
 
@@ -19,8 +21,11 @@ type QUICConfig struct {
 
 // QUICTransport implements the Transport interface for QUIC connections.
 type QUICTransport struct {
-	tlsConfig  *utls.Config
-	quicConfig *quic.Config
+	tlsConfig         *utls.Config
+	quicConfig        *quic.Config
+	obfuscationTarget ObfuscationTarget
+	obfuscationEnabled bool
+	decoyTrafficRate  time.Duration
 }
 
 // NewQUICTransport creates a new QUICTransport with the given configuration.
@@ -145,4 +150,119 @@ func (c *quicConn) RemoteAddr() net.Addr {
 func (c *quicConn) SetDeadline(t time.Time) error {
 	_ = c.SetReadDeadline(t)
 	return c.SetWriteDeadline(t)
+}
+
+// GetFingerprint returns the network-observable characteristics of this transport
+func (t *QUICTransport) GetFingerprint() TransportFingerprint {
+	return TransportFingerprint{
+		Protocol:         "quic",
+		PacketSizes:      []int{1200, 1280, 1472}, // Typical QUIC packet sizes
+		TimingPattern:    []time.Duration{20 * time.Millisecond, 50 * time.Millisecond},
+		TLSSignature:     "quic-standard",
+		ObfuscationLevel: t.getObfuscationLevel(),
+	}
+}
+
+// GenerateDecoyTraffic creates realistic background traffic to mask real connections
+func (t *QUICTransport) GenerateDecoyTraffic(ctx context.Context, targetAddr string) error {
+	if !t.obfuscationEnabled || t.decoyTrafficRate == 0 {
+		return nil // Decoy traffic disabled
+	}
+
+	go func() {
+		ticker := time.NewTicker(t.decoyTrafficRate)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				// Generate a small decoy connection
+				if err := t.generateSingleDecoyConnection(targetAddr); err != nil {
+					// Log error but don't stop decoy traffic generation
+					continue
+				}
+			}
+		}
+	}()
+
+	return nil
+}
+
+// SupportsObfuscation indicates if the transport can masquerade as other protocols
+func (t *QUICTransport) SupportsObfuscation() bool {
+	return t.obfuscationEnabled
+}
+
+// SetObfuscationTarget configures the transport to mimic a specific protocol
+func (t *QUICTransport) SetObfuscationTarget(target ObfuscationTarget) error {
+	t.obfuscationTarget = target
+	t.obfuscationEnabled = true
+	return nil
+}
+
+// Helper methods for obfuscation
+
+func (t *QUICTransport) getObfuscationLevel() ObfuscationLevel {
+	if !t.obfuscationEnabled {
+		return ObfuscationNone
+	}
+	
+	switch t.obfuscationTarget {
+	case ObfuscateAsHTTP, ObfuscateAsSSH:
+		return ObfuscationBasic
+	case ObfuscateAsBitTorrent, ObfuscateAsVideoStream:
+		return ObfuscationAdvanced
+	case ObfuscateAsVoIP, ObfuscateAsWebRTC:
+		return ObfuscationMaximal
+	default:
+		return ObfuscationBasic
+	}
+}
+
+func (t *QUICTransport) generateSingleDecoyConnection(targetAddr string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	conn, err := t.DialContext(ctx, "udp", targetAddr)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = conn.Close() }()
+
+	// Send some realistic-looking data based on obfuscation target
+	data := t.generateDecoyData()
+	if len(data) > 0 {
+		_, _ = conn.Write(data)
+		
+		// Wait for a realistic amount of time
+		delay := t.generateRealisticDelay()
+		time.Sleep(delay)
+	}
+
+	return nil
+}
+
+func (t *QUICTransport) generateDecoyData() []byte {
+	switch t.obfuscationTarget {
+	case ObfuscateAsWebRTC:
+		// WebRTC-like STUN binding request
+		return []byte{0x00, 0x01, 0x00, 0x00, 0x21, 0x12, 0xA4, 0x42}
+	case ObfuscateAsVoIP:
+		// RTP-like header
+		return []byte{0x80, 0x08, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00}
+	default:
+		// Generate random data
+		size, _ := rand.Int(rand.Reader, big.NewInt(512))
+		data := make([]byte, 32+size.Int64())
+		_, _ = rand.Read(data)
+		return data
+	}
+}
+
+func (t *QUICTransport) generateRealisticDelay() time.Duration {
+	// Generate random delay between 10ms and 500ms
+	delay, _ := rand.Int(rand.Reader, big.NewInt(490))
+	return time.Duration(10+delay.Int64()) * time.Millisecond
 }

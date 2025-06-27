@@ -1,0 +1,82 @@
+# Example bootstrap configuration
+health_check:
+  enabled: true
+  timeout: 2s
+  concurrency: 5
+  required_success_rate: 0.7
+
+cache_ttl: 24h
+
+# No hardcoded fallbacks - use cryptographic generation only
+fallback_config:
+  dga_enabled: true
+  dga_algorithm: "sha256_time_based"
+  seed_rotation_interval: "6h"
+  backup_discovery_channels:
+    - type: "steganographic"
+      platform: "twitter"
+    - type: "blockchain"
+      network: "ethereum"
+
+providers:
+  - type: "doh"
+    enabled: true
+    priority: 100
+    config:
+      providers:
+        - "cloudflare"
+        - "google"
+        - "quad9"
+      urls:
+        cloudflare: "https://dns.cloudflare.com/dns-query"
+        google: "https://dns.google/resolve"
+        quad9: "https://dns.quad9.net/dns-query"
+      server_names:
+        cloudflare: "dns.cloudflare.com"
+        google: "dns.google"
+        quad9: "dns.quad9.net"
+      query_timeout: 5s
+      max_retries: 3
+
+  - type: "domain_fronting"
+    enabled: true
+    priority: 90
+    config:
+      front_domains:
+        - "www.google.com"
+        - "a0.awsstatic.com"
+        - "www.cloudflare.com"
+      target_domains:
+        - "bootstrap.gocircum.com"
+      front_cdns:
+        google:
+          - "www.google.com"
+          - "www.youtube.com"
+        amazon:
+          - "a0.awsstatic.com"
+          - "s3.amazonaws.com"
+        cloudflare:
+          - "www.cloudflare.com"
+          - "cdnjs.cloudflare.com"
+      rotation_interval: 1h
+      connect_timeout: 10s
+
+  - type: "well_known"
+    enabled: true
+    priority: 80
+    config:
+      endpoints:
+        - "https://cdn.gocircum.com/.well-known/bootstrap"
+        - "https://api.gocircum.com/.well-known/bootstrap"
+        - "https://bootstrap.gocircum.com/.well-known/bootstrap"
+      query_timeout: 5s
+      response_format: "json"
+
+  - type: "ip_pool"
+    enabled: true
+    config:
+      initial_size: 50
+      max_size: 1000
+      min_size: 10
+      refresh_interval: 12h
+      persist_path: "/var/lib/gocircum/bootstrap_pool.json" 

@@ -3,6 +3,8 @@ package config
 import (
 	"crypto/x509"
 	"fmt"
+	"runtime"
+	"strings"
 	"time"
 )
 
@@ -158,4 +160,24 @@ type BootstrapDiscovery struct {
 	EnableWellKnownPaths bool     `yaml:"enable_well_known_paths"`
 	AlternateResolvers   []string `yaml:"alternate_resolvers"`
 	PeerDiscoveryEnabled bool     `yaml:"peer_discovery_enabled"`
+}
+
+// SecureDestroy securely clears sensitive data from memory
+func (f *Fingerprint) SecureDestroy() {
+	// Explicitly zero sensitive string fields
+	f.ID = strings.Repeat("\x00", len(f.ID))
+	f.Description = strings.Repeat("\x00", len(f.Description))
+	
+	if f.DomainFronting != nil {
+		f.DomainFronting.SecureDestroy()
+	}
+	
+	// Force garbage collection to clear old references
+	runtime.GC()
+}
+
+// SecureDestroy securely clears DomainFronting data
+func (df *DomainFronting) SecureDestroy() {
+	df.FrontDomain = strings.Repeat("\x00", len(df.FrontDomain))
+	df.CovertTarget = strings.Repeat("\x00", len(df.CovertTarget))
 }

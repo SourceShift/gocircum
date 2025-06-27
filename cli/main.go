@@ -61,8 +61,8 @@ func main() {
 		strategyID := proxyCmd.String("strategy", "", "Specific strategy ID to use. If not provided, the best ranked strategy will be used.")
 		configFile := proxyCmd.String("config", "strategies.yaml", "Path to the strategies YAML file.")
 		proxyCmd.Usage = func() {
-			fmt.Fprintf(proxyCmd.Output(), "Usage: gocircum-cli proxy [options]\n\n")
-			fmt.Fprintf(proxyCmd.Output(), "Runs the SOCKS5 proxy.\n\nOptions:\n")
+			_, _ = fmt.Fprintf(proxyCmd.Output(), "Usage: gocircum-cli proxy [options]\n\n")
+			_, _ = fmt.Fprintf(proxyCmd.Output(), "Runs the SOCKS5 proxy.\n\nOptions:\n")
 			proxyCmd.PrintDefaults()
 		}
 		if err := proxyCmd.Parse(commandArgs); err != nil {
@@ -74,8 +74,8 @@ func main() {
 		testCmd := flag.NewFlagSet("test", flag.ExitOnError)
 		configFile := testCmd.String("config", "strategies.yaml", "Path to the strategies YAML file.")
 		testCmd.Usage = func() {
-			fmt.Fprintf(testCmd.Output(), "Usage: gocircum-cli test [options]\n\n")
-			fmt.Fprintf(testCmd.Output(), "Tests the configured strategies.\n\nOptions:\n")
+			_, _ = fmt.Fprintf(testCmd.Output(), "Usage: gocircum-cli test [options]\n\n")
+			_, _ = fmt.Fprintf(testCmd.Output(), "Tests the configured strategies.\n\nOptions:\n")
 			testCmd.PrintDefaults()
 		}
 		if err := testCmd.Parse(commandArgs); err != nil {

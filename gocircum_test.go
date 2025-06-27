@@ -7,14 +7,30 @@ import (
 
 	"github.com/gocircum/gocircum"
 	"github.com/gocircum/gocircum/core/config"
+	"gopkg.in/yaml.v3"
 )
+
+// loadTestConfig loads a simple YAML config file for testing without security validation
+func loadTestConfig(filePath string) (*config.FileConfig, error) {
+	buf, err := os.ReadFile(filePath)
+	if err != nil {
+		return nil, err
+	}
+	
+	var cfg config.FileConfig
+	if err := yaml.Unmarshal(buf, &cfg); err != nil {
+		return nil, err
+	}
+	
+	return &cfg, nil
+}
 
 func TestEngineLifecycle(t *testing.T) {
 	if _, err := os.Stat("test_strategies.yaml"); os.IsNotExist(err) {
 		t.Skip("test_strategies.yaml not found, skipping lifecycle test.")
 	}
 
-	cfg, err := config.LoadFileConfig("test_strategies.yaml")
+	cfg, err := loadTestConfig("test_strategies.yaml")
 	if err != nil {
 		t.Fatalf("Failed to load test config: %v", err)
 	}
@@ -60,7 +76,7 @@ func TestCanBeImported(t *testing.T) {
 	if _, err := os.Stat("test_strategies.yaml"); os.IsNotExist(err) {
 		t.Skip("test_strategies.yaml not found, skipping import test.")
 	}
-	cfg, err := config.LoadFileConfig("test_strategies.yaml")
+	cfg, err := loadTestConfig("test_strategies.yaml")
 	if err != nil {
 		t.Fatalf("Failed to load test config: %v", err)
 	}

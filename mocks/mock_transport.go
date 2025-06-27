@@ -14,6 +14,7 @@ import (
 	net "net"
 	reflect "reflect"
 
+	transport "github.com/gocircum/gocircum/core/transport"
 	gomock "go.uber.org/mock/gomock"
 )
 
@@ -70,6 +71,34 @@ func (mr *MockTransportMockRecorder) DialContext(ctx, network, address any) *gom
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DialContext", reflect.TypeOf((*MockTransport)(nil).DialContext), ctx, network, address)
 }
 
+// GenerateDecoyTraffic mocks base method.
+func (m *MockTransport) GenerateDecoyTraffic(ctx context.Context, targetAddr string) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GenerateDecoyTraffic", ctx, targetAddr)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// GenerateDecoyTraffic indicates an expected call of GenerateDecoyTraffic.
+func (mr *MockTransportMockRecorder) GenerateDecoyTraffic(ctx, targetAddr any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GenerateDecoyTraffic", reflect.TypeOf((*MockTransport)(nil).GenerateDecoyTraffic), ctx, targetAddr)
+}
+
+// GetFingerprint mocks base method.
+func (m *MockTransport) GetFingerprint() transport.TransportFingerprint {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetFingerprint")
+	ret0, _ := ret[0].(transport.TransportFingerprint)
+	return ret0
+}
+
+// GetFingerprint indicates an expected call of GetFingerprint.
+func (mr *MockTransportMockRecorder) GetFingerprint() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetFingerprint", reflect.TypeOf((*MockTransport)(nil).GetFingerprint))
+}
+
 // Listen mocks base method.
 func (m *MockTransport) Listen(ctx context.Context, network, address string) (net.Listener, error) {
 	m.ctrl.T.Helper()
@@ -83,4 +112,32 @@ func (m *MockTransport) Listen(ctx context.Context, network, address string) (ne
 func (mr *MockTransportMockRecorder) Listen(ctx, network, address any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Listen", reflect.TypeOf((*MockTransport)(nil).Listen), ctx, network, address)
+}
+
+// SetObfuscationTarget mocks base method.
+func (m *MockTransport) SetObfuscationTarget(target transport.ObfuscationTarget) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "SetObfuscationTarget", target)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// SetObfuscationTarget indicates an expected call of SetObfuscationTarget.
+func (mr *MockTransportMockRecorder) SetObfuscationTarget(target any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetObfuscationTarget", reflect.TypeOf((*MockTransport)(nil).SetObfuscationTarget), target)
+}
+
+// SupportsObfuscation mocks base method.
+func (m *MockTransport) SupportsObfuscation() bool {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "SupportsObfuscation")
+	ret0, _ := ret[0].(bool)
+	return ret0
+}
+
+// SupportsObfuscation indicates an expected call of SupportsObfuscation.
+func (mr *MockTransportMockRecorder) SupportsObfuscation() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SupportsObfuscation", reflect.TypeOf((*MockTransport)(nil).SupportsObfuscation))
 }

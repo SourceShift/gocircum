@@ -89,18 +89,18 @@ type mockDialerFactory struct {
 }
 
 func (f *mockDialerFactory) NewDialer(transportCfg *config.Transport, tlsCfg *config.TLS) (engine.Dialer, error) {
-	// The mock dialer now needs the expected IP address.
-	expectedAddr := "1.2.3.4:443" // Based on mockResolver and default port.
+	// The mock dialer expects domain names, not resolved IPs
+	expectedAddr := "www.example.com:443" // The canary domain used in the test
 
 	switch tlsCfg.ClientHelloID {
 	case "fp1": // Succeeds fast
-		return mockDialer(f.t, f.ctrl, true, true, 50*time.Millisecond, expectedAddr), nil
+		return mockDialer(f.t, f.ctrl, true, true, 10*time.Millisecond, expectedAddr), nil
 	case "fp2": // Succeeds slow
-		return mockDialer(f.t, f.ctrl, true, true, 150*time.Millisecond, expectedAddr), nil
+		return mockDialer(f.t, f.ctrl, true, true, 200*time.Millisecond, expectedAddr), nil
 	case "fp3": // Fails to dial
 		return mockDialer(f.t, f.ctrl, false, false, 0, expectedAddr), nil
 	case "fp4": // Dials, but HTTP exchange fails
-		return mockDialer(f.t, f.ctrl, true, false, 20*time.Millisecond, expectedAddr), nil
+		return mockDialer(f.t, f.ctrl, true, false, 5*time.Millisecond, expectedAddr), nil
 	default: // Fails to dial by default
 		return mockDialer(f.t, f.ctrl, false, false, 0, expectedAddr), nil
 	}
@@ -129,9 +129,9 @@ func TestRanker_TestAndRank(t *testing.T) {
 	}
 
 	canaryDomains := []string{"www.example.com"}
-	// Create a context that tells the ranker this is a test run
-	testCtx := context.WithValue(context.Background(), testContextKey, true)
-	results, err := ranker.TestAndRank(testCtx, fingerprints, canaryDomains)
+	// Create a basic context for the test
+	ctx := context.Background()
+	results, err := ranker.TestAndRank(ctx, fingerprints, canaryDomains)
 	if err != nil {
 		t.Fatalf("TestAndRank failed: %v", err)
 	}
