@@ -608,7 +608,10 @@ func (e *Engine) installSystemDNSBlocker() error {
 	// Comprehensive DNS leak prevention using multiple layers
 
 	// 1. Block CGO-based DNS resolution completely
-	os.Setenv("GODEBUG", "netdns=go")
+	if err := os.Setenv("GODEBUG", "netdns=go"); err != nil {
+		e.logger.Warn("Failed to set GODEBUG environment variable", "error", err)
+		// Continue despite error - this is just one layer of protection
+	}
 
 	// 2. Install comprehensive resolver that blocks ALL DNS mechanisms
 	blockedResolver := &net.Resolver{
@@ -689,11 +692,18 @@ func (e *Engine) installNetworkDNSBlocking() error {
 
 // getGoroutineID extracts the current goroutine ID for tracking
 func getGoroutineID() int {
-	defer func() { recover() }()
+	var id int
+	defer func() {
+		if r := recover(); r != nil {
+			// Recovery logic - we'll use a default value in case of panic
+			id = -1
+		}
+	}()
+
 	var buf [64]byte
 	n := runtime.Stack(buf[:], false)
 	idField := strings.Fields(strings.TrimPrefix(string(buf[:n]), "goroutine "))[0]
-	id, _ := strconv.Atoi(idField)
+	id, _ = strconv.Atoi(idField)
 	return id
 }
 

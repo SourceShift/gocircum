@@ -771,7 +771,13 @@ func getBackupEntropy() ([]byte, error) {
 	// Try to read from /dev/urandom as fallback (not ideal but better than nothing)
 	f, err := os.Open("/dev/urandom")
 	if err == nil {
-		defer f.Close()
+		defer func() {
+			if closeErr := f.Close(); closeErr != nil {
+				// Log but continue, as we've already read the data
+				logging.GetLogger().Warn("Error closing urandom", "error", closeErr)
+			}
+		}()
+
 		_, err = io.ReadFull(f, entropy)
 		if err == nil {
 			return entropy, nil
@@ -859,7 +865,8 @@ func isTestEnvironment() bool {
 func hashBasedSelection(index int, seedString string) int64 {
 	// Create a deterministic but unpredictable value for testing
 	h := sha256.New()
-	h.Write([]byte(fmt.Sprintf("%s_%d", seedString, index)))
+	_, _ = fmt.Fprintf(h, "%s_%d", seedString, index) // Ignoring error - hash.Write never returns error
+
 	hash := h.Sum(nil)
 
 	// Use first 8 bytes as a deterministic but cryptographic value

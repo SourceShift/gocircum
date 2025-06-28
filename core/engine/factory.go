@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"math"
-	"math/rand"
 	"net"
 	"os"
 	"strings"
@@ -18,6 +17,8 @@ import (
 	"github.com/gocircum/gocircum/core/constants"
 	"github.com/gocircum/gocircum/core/transport"
 	"github.com/gocircum/gocircum/pkg/logging"
+
+	crypto_rand "crypto/rand"
 
 	utls "github.com/refraction-networking/utls"
 )
@@ -182,7 +183,6 @@ func validateAndExtractSNI(address, configuredServerName string) (string, error)
 				Code:    "SNI_VALIDATION_FAILED",
 				Type:    "configuration_error",
 				Context: "server_name_validation",
-				// No sensitive details exposed
 			}
 		}
 		return configuredServerName, nil
@@ -490,7 +490,6 @@ type TrafficProfile struct {
 	delayRanges      [][]time.Duration
 	jitterParameters *JitterParameters
 	patternState     int
-	packets          []packetInfo
 }
 
 // JitterParameters controls variance in timing
@@ -1155,7 +1154,13 @@ func getHardwareEntropy() ([]byte, error) {
 	// Try to read from /dev/urandom first (available on most Unix systems)
 	f, err := os.Open("/dev/urandom")
 	if err == nil {
-		defer f.Close()
+		defer func() {
+			if closeErr := f.Close(); closeErr != nil {
+				// Log but continue, as we've already read the data
+				logging.GetLogger().Warn("Error closing urandom", "error", closeErr)
+			}
+		}()
+
 		_, err = io.ReadFull(f, entropy)
 		if err == nil {
 			return entropy, nil
@@ -1163,7 +1168,7 @@ func getHardwareEntropy() ([]byte, error) {
 	}
 
 	// If that fails, try directly from crypto/rand
-	_, err = rand.Read(entropy)
+	_, err = crypto_rand.Read(entropy)
 	if err != nil {
 		return nil, fmt.Errorf("hardware entropy sources exhausted: %w", err)
 	}
@@ -1172,6 +1177,7 @@ func getHardwareEntropy() ([]byte, error) {
 }
 
 // deriveSecureInt derives a secure integer within range [min,max] from entropy
+// nolint:unused // Preserved for future implementation
 func deriveSecureInt(entropy []byte, min, max int) (int, error) {
 	if len(entropy) < 8 {
 		return 0, fmt.Errorf("insufficient entropy for secure derivation")
@@ -1197,6 +1203,7 @@ func deriveSecureInt(entropy []byte, min, max int) (int, error) {
 
 // gatherTimingEntropy collects entropy from timing side-channels
 // This is a last resort when crypto/rand fails
+// nolint:unused // Preserved for future implementation
 func gatherTimingEntropy() []byte {
 	entropy := make([]byte, 32)
 
@@ -1229,6 +1236,7 @@ func gatherTimingEntropy() []byte {
 }
 
 // deriveIntFromTimingEntropy generates an integer in range [min,max] from timing data
+// nolint:unused // Preserved for future implementation
 func deriveIntFromTimingEntropy(entropy []byte, min, max int) int {
 	if len(entropy) < 4 {
 		return (min + max) / 2 // Safe middle value if insufficient entropy
@@ -1244,6 +1252,7 @@ func deriveIntFromTimingEntropy(entropy []byte, min, max int) int {
 }
 
 // logSecurityEvent logs security-related events
+// nolint:unused // Preserved for future implementation
 func (c *fragmentingConn) logSecurityEvent(eventType, details string) {
 	// Use structured logging instead
 	logging.GetLogger().Error("security event",

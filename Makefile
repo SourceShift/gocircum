@@ -103,4 +103,9 @@ tidy:
 .PHONY: clean
 clean:
 	@echo "Cleaning up build artifacts..."
-	rm -rf $(BIN_DIR) $(BUILD_DIR) 
+	rm -rf $(BIN_DIR) $(BUILD_DIR)
+
+.PHONY: repomix
+repomix:
+	@echo "Running repomix with ignore patterns..."
+	repomix --ignore '**/*mock**,**/*test*,**/*.json,**/*.js,**/*.md,**/*.svg,**/*.xml,./onepager/**,**/*.py,**/*.txt,**/docs' 
