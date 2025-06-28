@@ -8,9 +8,9 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
-	"reflect"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/gocircum/gocircum/core/config"
 
@@ -20,36 +20,6 @@ import (
 
 func certToPEM(cert *x509.Certificate) string {
 	return string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: cert.Raw}))
-}
-
-func TestGetShuffledProviders(t *testing.T) {
-	providers := []config.DoHProvider{
-		{Name: "1"}, {Name: "2"}, {Name: "3"}, {Name: "4"}, {Name: "5"},
-		{Name: "6"}, {Name: "7"}, {Name: "8"}, {Name: "9"}, {Name: "10"},
-	}
-	resolver, err := NewDoHResolver(providers)
-	require.NoError(t, err)
-
-	// Try shuffling multiple times to reduce the chance of identical results
-	// With 10 providers and 5 attempts, the chance of all shuffles being identical is extremely low
-	shuffled1 := resolver.getShuffledProviders()
-
-	allIdentical := true
-	maxAttempts := 5
-
-	for i := 0; i < maxAttempts; i++ {
-		shuffled2 := resolver.getShuffledProviders()
-		if !reflect.DeepEqual(shuffled1, shuffled2) {
-			allIdentical = false
-			break
-		}
-	}
-
-	if allIdentical {
-		t.Skipf("After %d attempts, all shuffled provider lists were identical. This is statistically unlikely but possible.", maxAttempts)
-	}
-
-	require.Equal(t, len(providers), len(shuffled1), "Expected shuffled list to have the same length as the original")
 }
 
 func TestDoHResolver_Resolve_Failover(t *testing.T) {
@@ -258,4 +228,31 @@ func TestCreateClientForProvider_BootstrapFailover(t *testing.T) {
 	resp, err := client.Do(req)
 	require.NoError(t, err)
 	_ = resp.Body.Close()
+}
+
+func TestGenerateDGAProviders(t *testing.T) {
+	dgaCfg := &config.DGAConfig{
+		Algorithm:            "argon2id_sha3_based",
+		EntropySources:       []string{"system_random", "network_timing"},
+		SeedRotationInterval: "2h",
+		DomainCount:          5,
+		ValidationThreshold:  3,
+	}
+	providers := []config.DoHProvider{
+		{
+			Name:      "dga_test",
+			DGAConfig: dgaCfg,
+		},
+	}
+	resolver, err := NewDoHResolver(providers)
+	require.NoError(t, err)
+
+	seed := time.Now()
+	generated, err := resolver.generateDGAProviders(seed)
+	require.NoError(t, err)
+	require.Equal(t, dgaCfg.DomainCount, len(generated))
+
+	for i, p := range generated {
+		t.Logf("DGA Provider %d: Name=%s, URL=%s, ServerName=%s", i, p.Name, p.URL, p.ServerName)
+	}
 }

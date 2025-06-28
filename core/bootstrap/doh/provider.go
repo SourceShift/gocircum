@@ -423,21 +423,6 @@ func (p *Provider) getPeerDiscoveredDomains() []string {
 	return p.removeDuplicateDomains(domains)
 }
 
-// validateEntropyIndependence cross-validates entropy sources
-func (p *Provider) validateEntropyIndependence(bundle *EntropyBundle) []byte {
-	// In a real implementation, we would test for correlation between
-	// entropy sources and exclude or down-weight correlated sources
-
-	// For now, combine all entropy sources into a single validated source
-	h := sha256.New()
-	h.Write(bundle.TimeBased)
-	h.Write(bundle.NetworkBased)
-	h.Write(bundle.SystemBased)
-	h.Write(bundle.ExternalBased)
-	h.Write(bundle.ClientSpecific)
-
-	return h.Sum(nil)
-}
 
 // connectToPeerNetwork connects to the peer-to-peer discovery network
 func (p *Provider) connectToPeerNetwork() PeerNetwork {
@@ -816,56 +801,11 @@ func (p *Provider) generateHijackingDomains(bundle *EntropyBundle, count int) []
 	return domains
 }
 
-// selectRandomSubset selects a random subset of domains
-func (p *Provider) selectRandomSubset(domains []string, count int) []string {
-	if len(domains) <= count {
-		return domains
-	}
 
-	// Cryptographically secure shuffle
-	p.cryptoShuffle(domains)
-	return domains[:count]
-}
 
-// Helper methods for entropy gathering
-func (p *Provider) generateTimeBasedEntropy(seed time.Time) []byte {
-	entropy := make([]byte, 0, 64)
 
-	// Multiple time granularities
-	entropy = append(entropy, []byte(seed.Format("2006-01-02-15-04"))...)
-	entropy = append(entropy, []byte(fmt.Sprintf("%d", seed.UnixNano()))...)
-	entropy = append(entropy, []byte(fmt.Sprintf("%d", seed.Unix()))...)
 
-	return entropy
-}
 
-func (p *Provider) extractNetworkEntropy() []byte {
-	// Simple network-based entropy (in real implementation, use more sources)
-	entropy := make([]byte, 16)
-	_, _ = rand.Read(entropy)
-	return entropy
-}
-
-func (p *Provider) extractSystemEntropy() []byte {
-	// System-based entropy (simplified)
-	entropy := make([]byte, 16)
-	_, _ = rand.Read(entropy)
-	return entropy
-}
-
-func (p *Provider) extractExternalEntropy() []byte {
-	// External entropy sources (simplified)
-	entropy := make([]byte, 16)
-	_, _ = rand.Read(entropy)
-	return entropy
-}
-
-func (p *Provider) extractClientEntropy() []byte {
-	// Client-specific entropy (simplified)
-	entropy := make([]byte, 16)
-	_, _ = rand.Read(entropy)
-	return entropy
-}
 
 func (p *Provider) combineEntropySecurely(bundle *EntropyBundle) []byte {
 	hash := sha256.New()

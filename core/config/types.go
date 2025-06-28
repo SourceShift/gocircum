@@ -137,21 +137,36 @@ func (t *TLS) Validate() error {
 	return nil
 }
 
+// P2PDiscovery holds configuration for peer-to-peer network discovery
+type P2PDiscovery struct {
+	Network               string   `yaml:"network"`                 // Network type (ipfs, libp2p, i2p)
+	BootstrapPeers        []string `yaml:"bootstrap_peers"`         // Initial peers to connect to
+	MinimumPeerReputation int      `yaml:"minimum_peer_reputation"` // Minimum reputation score for peers
+	DiscoveryInterval     string   `yaml:"discovery_interval"`      // How often to query the network
+	MaxPeers              int      `yaml:"max_peers"`               // Maximum number of peers to connect to
+}
+
 // DoHProvider holds the configuration for a single DNS-over-HTTPS provider.
 type DoHProvider struct {
-	Name                 string   `yaml:"name"`
-	URL                  string   `yaml:"url"`
-	ServerName           string   `yaml:"server_name"` // The real DoH server name, for the Host header.
-	Bootstrap            []string `yaml:"bootstrap"`   // IPs of the FrontDomain, not the DoH server.
-	BootstrapPool        []string `yaml:"bootstrap_pool,omitempty"`
-	BootstrapRotationSec int      `yaml:"bootstrap_rotation_sec,omitempty"`
-	RootCA               string   `yaml:"root_ca,omitempty"`
-	FrontDomain          string   `yaml:"front_domain,omitempty"` // The benign domain for TLS SNI.
-	ObfuscatedBootstrap  bool     `yaml:"obfuscated_bootstrap,omitempty"`
-	// Enhanced resilience fields
+	Name                 string             `yaml:"name"`
+	URL                  string             `yaml:"url"`
+	ServerName           string             `yaml:"server_name"`
+	Bootstrap            []string           `yaml:"bootstrap"`
+	BootstrapPool        []string           `yaml:"bootstrap_pool,omitempty"`
+	BootstrapRotationSec int                `yaml:"bootstrap_rotation_sec,omitempty"`
+	RootCA               string             `yaml:"root_ca,omitempty"`
+	FrontDomain          string             `yaml:"front_domain,omitempty"`
+	ObfuscatedBootstrap  bool               `yaml:"obfuscated_bootstrap,omitempty"`
 	BootstrapDiscovery   BootstrapDiscovery `yaml:"bootstrap_discovery,omitempty"`
 	MaxBootstrapFailures int                `yaml:"max_bootstrap_failures,omitempty"`
 	BootstrapHealthCheck bool               `yaml:"bootstrap_health_check,omitempty"`
+
+	// New fields for decentralized/discovered providers
+	DGAConfig              *DGAConfig              `yaml:"dga_config,omitempty"`
+	SteganographicChannels []SteganographicChannel `yaml:"steganographic_channels,omitempty"`
+	BlockchainDiscovery    []BlockchainDiscovery   `yaml:"blockchain_discovery,omitempty"`
+	PeerDiscovery          *PeerDiscovery          `yaml:"peer_discovery,omitempty"`
+	P2PDiscovery           []P2PDiscovery          `yaml:"p2p_discovery,omitempty"`
 }
 
 // BootstrapDiscovery contains settings for dynamic discovery of bootstrap IPs
@@ -162,16 +177,48 @@ type BootstrapDiscovery struct {
 	PeerDiscoveryEnabled bool     `yaml:"peer_discovery_enabled"`
 }
 
+// DGAConfig holds configuration for the Domain Generation Algorithm
+type DGAConfig struct {
+	Algorithm            string   `yaml:"algorithm"`
+	EntropySources       []string `yaml:"entropy_sources"`
+	SeedRotationInterval string   `yaml:"seed_rotation_interval"`
+	DomainCount          int      `yaml:"domain_count"`
+	ValidationThreshold  int      `yaml:"validation_threshold"`
+}
+
+// SteganographicChannel holds config for steganographic discovery
+type SteganographicChannel struct {
+	Platform            string   `yaml:"platform"`
+	SearchPatterns      []string `yaml:"search_patterns,omitempty"`
+	ExtractionAlgorithm string   `yaml:"extraction_algorithm,omitempty"`
+	Subreddits          []string `yaml:"subreddits,omitempty"`
+	Pattern             string   `yaml:"pattern,omitempty"`
+}
+
+// BlockchainDiscovery holds config for blockchain-based provider discovery
+type BlockchainDiscovery struct {
+	Network          string `yaml:"network"`
+	ContractAddress  string `yaml:"contract_address"`
+	ValidationMethod string `yaml:"validation_method"`
+}
+
+// PeerDiscovery holds config for peer-to-peer provider discovery
+type PeerDiscovery struct {
+	BootstrapMethod string `yaml:"bootstrap_method"`
+	GossipProtocol  string `yaml:"gossip_protocol"`
+	PeerValidation  string `yaml:"peer_validation"`
+}
+
 // SecureDestroy securely clears sensitive data from memory
 func (f *Fingerprint) SecureDestroy() {
 	// Explicitly zero sensitive string fields
 	f.ID = strings.Repeat("\x00", len(f.ID))
 	f.Description = strings.Repeat("\x00", len(f.Description))
-	
+
 	if f.DomainFronting != nil {
 		f.DomainFronting.SecureDestroy()
 	}
-	
+
 	// Force garbage collection to clear old references
 	runtime.GC()
 }
