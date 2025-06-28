@@ -20,7 +20,6 @@ import (
 	"github.com/gocircum/gocircum/pkg/logging"
 )
 
-
 // DNSResolver defines the interface for a DNS resolver.
 type DNSResolver interface {
 	Resolve(ctx context.Context, name string) (context.Context, net.IP, error)
@@ -106,19 +105,24 @@ func (r *Ranker) TestAndRank(ctx context.Context, fingerprints []*config.Fingerp
 		for _, testSession := range organicTestPlan.Sessions {
 			go func(session *OrganicTestSession) {
 				// Simulate realistic browsing session that hides strategy tests
-				r.simulateRealisticBrowsingSession(ctx, session)
-				
+				if err := r.simulateRealisticBrowsingSession(ctx, session); err != nil {
+					r.Logger.Error("Failed to simulate realistic browsing session",
+						"error", err,
+						"context", "organic_traffic_simulation")
+					return
+				}
+
 				// Embed actual strategy test within normal-looking traffic
 				for _, embeddedTest := range session.EmbeddedTests {
 					// Generate realistic pre-request activity
 					r.generatePreRequestActivity(ctx, embeddedTest.Strategy)
-					
+
 					// Perform test disguised as normal web traffic
 					success, latency := r.performDisguisedStrategyTest(ctx, embeddedTest)
-					
+
 					// Continue realistic browsing pattern post-test
 					r.generatePostRequestActivity(ctx, embeddedTest.Strategy, success)
-					
+
 					results <- StrategyResult{
 						Fingerprint: embeddedTest.Strategy,
 						Success:     success,
@@ -171,11 +175,6 @@ loop:
 	return r.rankResults(rankedResults), nil
 }
 
-
-
-
-
-
 // checkMemoryPressure monitors system memory usage
 func (r *Ranker) checkMemoryPressure() bool {
 	var m runtime.MemStats
@@ -184,7 +183,6 @@ func (r *Ranker) checkMemoryPressure() bool {
 	// Stop if heap size exceeds 100MB
 	return m.HeapAlloc > 100*1024*1024
 }
-
 
 // testStrategy performs a single connection test with realistic traffic patterns
 func (r *Ranker) testStrategy(ctx context.Context, fingerprint *config.Fingerprint, canaryDomains []string) (bool, time.Duration, error) {
@@ -228,25 +226,64 @@ func (r *Ranker) testStrategy(ctx context.Context, fingerprint *config.Fingerpri
 func (r *Ranker) generateRealisticPreConnectionDelay() time.Duration {
 	// Simulate realistic user behavior: URL typing, thinking, etc.
 	var delay int
+	var err error
+
 	if isRunningInTest() {
-		delay, _ = engine.CryptoRandInt(1, 10) // 1-10 milliseconds for tests
+		delay, err = engine.CryptoRandInt(1, 10) // 1-10 milliseconds for tests
 	} else {
-		delay, _ = engine.CryptoRandInt(500, 3000) // 0.5-3 seconds for production
+		delay, err = engine.CryptoRandInt(500, 3000) // 0.5-3 seconds for production
 	}
+
+	if err != nil {
+		// CRITICAL: Never fall back to weak randomness
+		r.Logger.Error("CRYPTOGRAPHIC_FAILURE: Cannot generate secure random delay",
+			"error", err,
+			"context", "pre_connection_delay")
+
+		// Use a conservative default value rather than weak randomness
+		if isRunningInTest() {
+			delay = 5 // Middle value for tests
+		} else {
+			delay = 1500 // Middle value for production
+		}
+	}
+
 	return time.Duration(delay) * time.Millisecond
 }
 
 // simulateRealisticDNSLookup adds delays that mimic real DNS lookup timing
 func (r *Ranker) simulateRealisticDNSLookup() time.Duration {
 	// Even though we use DoH, simulate realistic DNS timing to avoid detection
-	delay, _ := engine.CryptoRandInt(50, 200) // 50-200ms typical DNS lookup
+	delay, err := engine.CryptoRandInt(50, 200) // 50-200ms typical DNS lookup
+
+	if err != nil {
+		// CRITICAL: Never fall back to weak randomness
+		r.Logger.Error("CRYPTOGRAPHIC_FAILURE: Cannot generate secure random delay",
+			"error", err,
+			"context", "dns_lookup_simulation")
+
+		// Use a conservative default value rather than weak randomness
+		delay = 125 // Middle value for DNS lookup simulation
+	}
+
 	return time.Duration(delay) * time.Millisecond
 }
 
 // generateConnectionJitter adds realistic network jitter
 func (r *Ranker) generateConnectionJitter() time.Duration {
 	// Add realistic network timing variation
-	jitter, _ := engine.CryptoRandInt(10, 100) // 10-100ms jitter
+	jitter, err := engine.CryptoRandInt(10, 100) // 10-100ms jitter
+
+	if err != nil {
+		// CRITICAL: Never fall back to weak randomness
+		r.Logger.Error("CRYPTOGRAPHIC_FAILURE: Cannot generate secure jitter",
+			"error", err,
+			"context", "connection_jitter")
+
+		// Use a conservative default value rather than weak randomness
+		jitter = 55 // Middle value for jitter
+	}
+
 	return time.Duration(jitter) * time.Millisecond
 }
 
@@ -257,15 +294,41 @@ func (r *Ranker) selectTargetWithRealisticPattern(canaryDomains []string) string
 	}
 
 	// Simulate typical browsing patterns - users often return to popular sites
-	popularSiteProb, _ := engine.CryptoRandInt(1, 100)
+	popularSiteProb, err := engine.CryptoRandInt(1, 100)
+	if err != nil {
+		r.Logger.Error("CRYPTOGRAPHIC_FAILURE: Cannot generate secure random number",
+			"error", err,
+			"context", "target_selection_probability")
+
+		// Default to a balanced approach rather than weak randomness
+		popularSiteProb = 50
+	}
+
 	if popularSiteProb <= 40 && len(canaryDomains) >= 2 { // 40% chance to visit a popular site
 		// Choose one of the first two domains (typically more popular)
-		idx, _ := engine.CryptoRandInt(0, 1)
+		idx, err := engine.CryptoRandInt(0, 1)
+		if err != nil {
+			r.Logger.Error("CRYPTOGRAPHIC_FAILURE: Cannot generate secure random index",
+				"error", err,
+				"context", "popular_domain_selection")
+
+			// Use first domain as safe default
+			return canaryDomains[0]
+		}
 		return canaryDomains[idx]
 	}
 
 	// Otherwise choose randomly from all domains
-	idx, _ := engine.CryptoRandInt(0, len(canaryDomains)-1)
+	idx, err := engine.CryptoRandInt(0, len(canaryDomains)-1)
+	if err != nil {
+		r.Logger.Error("CRYPTOGRAPHIC_FAILURE: Cannot generate secure random index",
+			"error", err,
+			"context", "domain_selection")
+
+		// Use first domain as safe default rather than weak randomness
+		return canaryDomains[0]
+	}
+
 	return canaryDomains[idx]
 }
 
@@ -297,17 +360,35 @@ func (r *Ranker) performObfuscatedTest(ctx context.Context, fingerprint *config.
 func (r *Ranker) simulateRealisticDataExchange(conn net.Conn) error {
 	// Simulate HTTP request/response exchange
 	// Generate realistic-looking HTTP request
-	reqSize, _ := engine.CryptoRandInt(200, 600) // Typical HTTP request size
-	request := make([]byte, reqSize)
-	_, err := rand.Read(request)
+	reqSize, err := engine.CryptoRandInt(200, 600) // Typical HTTP request size
 	if err != nil {
-		return err
+		r.Logger.Error("CRYPTOGRAPHIC_FAILURE: Cannot generate secure random request size",
+			"error", err,
+			"context", "data_exchange_simulation")
+
+		// Use a fixed middle value as a safe default
+		reqSize = 400
+	}
+
+	request := make([]byte, reqSize)
+	_, err = rand.Read(request)
+	if err != nil {
+		return fmt.Errorf("failed to generate random data: %w", err)
 	}
 
 	// Write request in chunks like real browsers
 	offset := 0
 	for offset < len(request) {
-		chunkSizeInt, _ := engine.CryptoRandInt(10, 50)
+		chunkSizeInt, err := engine.CryptoRandInt(10, 50)
+		if err != nil {
+			r.Logger.Error("CRYPTOGRAPHIC_FAILURE: Cannot generate secure random chunk size",
+				"error", err,
+				"context", "data_exchange_chunking")
+
+			// Use a fixed middle value as a safe default rather than weak randomness
+			chunkSizeInt = 30
+		}
+
 		chunkSize := int64(chunkSizeInt)
 		if offset+int(chunkSize) > len(request) {
 			chunkSize = int64(len(request) - offset)
@@ -320,7 +401,15 @@ func (r *Ranker) simulateRealisticDataExchange(conn net.Conn) error {
 		offset += int(chunkSize)
 
 		if offset < len(request) {
-			delay, _ := engine.CryptoRandInt(5, 50)
+			delay, err := engine.CryptoRandInt(5, 50)
+			if err != nil {
+				r.Logger.Error("CRYPTOGRAPHIC_FAILURE: Cannot generate secure random delay",
+					"error", err,
+					"context", "data_exchange_timing")
+
+				// Use a fixed middle value as a safe default
+				delay = 25
+			}
 			time.Sleep(time.Duration(delay) * time.Millisecond)
 		}
 	}
@@ -336,25 +425,56 @@ func (r *Ranker) generatePostConnectionActivity(ctx context.Context, fingerprint
 	if !success {
 		// Simulate user retry behavior on failure
 		var retryDelay int
+		var err error
+
 		if isRunningInTest() {
-			retryDelay, _ = engine.CryptoRandInt(1, 5) // 1-5 milliseconds for tests
+			retryDelay, err = engine.CryptoRandInt(1, 5) // 1-5 milliseconds for tests
 		} else {
-			retryDelay, _ = engine.CryptoRandInt(2000, 8000) // 2-8 second retry delay for production
+			retryDelay, err = engine.CryptoRandInt(2000, 8000) // 2-8 second retry delay for production
 		}
+
+		if err != nil {
+			r.Logger.Error("CRYPTOGRAPHIC_FAILURE: Cannot generate secure random retry delay",
+				"error", err,
+				"context", "post_connection_failure")
+
+			// Use a fixed middle value as a safe default
+			if isRunningInTest() {
+				retryDelay = 3 // Middle value for tests
+			} else {
+				retryDelay = 5000 // Middle value for production
+			}
+		}
+
 		time.Sleep(time.Duration(retryDelay) * time.Millisecond)
 		return
 	}
 
 	// Simulate realistic browsing continuation
 	var pageLoadSimulation int
+	var err error
+
 	if isRunningInTest() {
-		pageLoadSimulation, _ = engine.CryptoRandInt(1, 5) // 1-5 milliseconds for tests
+		pageLoadSimulation, err = engine.CryptoRandInt(1, 5) // 1-5 milliseconds for tests
 	} else {
-		pageLoadSimulation, _ = engine.CryptoRandInt(1000, 5000) // 1-5 seconds page "load" for production
+		pageLoadSimulation, err = engine.CryptoRandInt(1000, 5000) // 1-5 seconds page "load" for production
 	}
+
+	if err != nil {
+		r.Logger.Error("CRYPTOGRAPHIC_FAILURE: Cannot generate secure random page load simulation",
+			"error", err,
+			"context", "post_connection_success")
+
+		// Use a fixed middle value as a safe default
+		if isRunningInTest() {
+			pageLoadSimulation = 3 // Middle value for tests
+		} else {
+			pageLoadSimulation = 3000 // Middle value for production
+		}
+	}
+
 	time.Sleep(time.Duration(pageLoadSimulation) * time.Millisecond)
 }
-
 
 func min(a, b int) int {
 	if a < b {
@@ -431,49 +551,94 @@ func (r *Ranker) generateOrganicTestPlan(fingerprints []*config.Fingerprint, can
 			sessionCount = 4 // Cap at 4 sessions even in tests
 		}
 	} else {
-		sessionCount, _ = engine.CryptoRandInt(2, 4) // 2-4 realistic browsing sessions for production
+		var err error
+		sessionCount, err = engine.CryptoRandInt(2, 4) // 2-4 realistic browsing sessions for production
+		if err != nil {
+			r.Logger.Error("CRYPTOGRAPHIC_FAILURE: Cannot generate secure random session count",
+				"error", err,
+				"context", "organic_test_plan")
+
+			// Use a fixed safe value rather than weak randomness
+			sessionCount = 3 // Middle value for session count
+		}
 	}
 	sessions := make([]*OrganicTestSession, sessionCount)
-	
+
 	// Distribute strategy tests across sessions
 	strategyIndex := 0
 	for i := 0; i < sessionCount; i++ {
 		sessions[i] = r.generateSingleBrowsingSession(fingerprints, &strategyIndex, canaryDomains)
 	}
-	
+
 	return &OrganicTestPlan{Sessions: sessions}
 }
 
 // generateSingleBrowsingSession creates one realistic browsing session
 func (r *Ranker) generateSingleBrowsingSession(fingerprints []*config.Fingerprint, strategyIndex *int, canaryDomains []string) *OrganicTestSession {
 	var sessionDuration, pageCount int
+	var err error
+
 	if isRunningInTest() {
-		sessionDuration, _ = engine.CryptoRandInt(1, 5) // 1-5 seconds for tests
-		pageCount, _ = engine.CryptoRandInt(1, 3)      // 1-3 pages per session for tests
+		sessionDuration, err = engine.CryptoRandInt(1, 5) // 1-5 seconds for tests
+		if err != nil {
+			r.Logger.Error("CRYPTOGRAPHIC_FAILURE: Cannot generate secure random session duration",
+				"error", err,
+				"context", "browsing_session_test")
+			sessionDuration = 3 // Middle value
+		}
+
+		pageCount, err = engine.CryptoRandInt(1, 3) // 1-3 pages per session for tests
+		if err != nil {
+			r.Logger.Error("CRYPTOGRAPHIC_FAILURE: Cannot generate secure random page count",
+				"error", err,
+				"context", "browsing_session_test")
+			pageCount = 2 // Middle value
+		}
 	} else {
-		sessionDuration, _ = engine.CryptoRandInt(300, 1800) // 5-30 minutes for production
-		pageCount, _ = engine.CryptoRandInt(5, 15)           // 5-15 pages per session for production
+		sessionDuration, err = engine.CryptoRandInt(300, 1800) // 5-30 minutes for production
+		if err != nil {
+			r.Logger.Error("CRYPTOGRAPHIC_FAILURE: Cannot generate secure random session duration",
+				"error", err,
+				"context", "browsing_session_production")
+			sessionDuration = 1050 // Middle value
+		}
+
+		pageCount, err = engine.CryptoRandInt(5, 15) // 5-15 pages per session for production
+		if err != nil {
+			r.Logger.Error("CRYPTOGRAPHIC_FAILURE: Cannot generate secure random page count",
+				"error", err,
+				"context", "browsing_session_production")
+			pageCount = 10 // Middle value
+		}
 	}
-	
+
 	session := &OrganicTestSession{
-		Duration:   time.Duration(sessionDuration) * time.Second,
-		PageVisits: make([]PageVisit, pageCount),
+		Duration:      time.Duration(sessionDuration) * time.Second,
+		PageVisits:    make([]PageVisit, pageCount),
 		EmbeddedTests: make([]EmbeddedTest, 0),
 	}
-	
+
 	// Embed strategy tests randomly within the session
 	testsToEmbed := minInt(len(fingerprints)-*strategyIndex, 3) // Max 3 tests per session
 	for i := 0; i < testsToEmbed && *strategyIndex < len(fingerprints); i++ {
 		var targetDomain string
 		if isRunningInTest() && len(canaryDomains) > 0 {
 			// Use canary domains in tests
-			domainIdx, _ := engine.CryptoRandInt(0, len(canaryDomains)-1)
+			domainIdx, err := engine.CryptoRandInt(0, len(canaryDomains)-1)
+			if err != nil {
+				r.Logger.Error("CRYPTOGRAPHIC_FAILURE: Cannot generate secure random domain index",
+					"error", err,
+					"context", "canary_domain_selection")
+
+				// Use first domain as safe default rather than weak randomness
+				domainIdx = 0
+			}
 			targetDomain = canaryDomains[domainIdx]
 		} else {
 			// Use realistic domains in production
 			targetDomain = r.selectRealisticTargetDomain()
 		}
-		
+
 		session.EmbeddedTests = append(session.EmbeddedTests, EmbeddedTest{
 			Strategy:     fingerprints[*strategyIndex],
 			TargetDomain: targetDomain,
@@ -481,7 +646,7 @@ func (r *Ranker) generateSingleBrowsingSession(fingerprints []*config.Fingerprin
 		})
 		*strategyIndex++
 	}
-	
+
 	return session
 }
 
@@ -492,56 +657,113 @@ func (r *Ranker) selectRealisticTargetDomain() string {
 		"www.amazon.com", "www.wikipedia.org", "www.twitter.com",
 		"www.netflix.com", "www.linkedin.com", "www.instagram.com",
 	}
-	idx, _ := engine.CryptoRandInt(0, len(domains)-1)
+
+	idx, err := engine.CryptoRandInt(0, len(domains)-1)
+	if err != nil {
+		r.Logger.Error("CRYPTOGRAPHIC_FAILURE: Cannot generate secure random domain index",
+			"error", err,
+			"context", "realistic_domain_selection")
+
+		// Use a middle domain as safe default rather than weak randomness
+		return "www.amazon.com" // Consistently return a middle domain when randomness fails
+	}
+
 	return domains[idx]
 }
 
 // selectMaskingType chooses how to mask the strategy test
 func (r *Ranker) selectMaskingType() string {
 	types := []string{"web_browsing", "video_streaming", "social_media", "file_download"}
-	idx, _ := engine.CryptoRandInt(0, len(types)-1)
+
+	idx, err := engine.CryptoRandInt(0, len(types)-1)
+	if err != nil {
+		r.Logger.Error("CRYPTOGRAPHIC_FAILURE: Cannot generate secure random masking type",
+			"error", err,
+			"context", "masking_type_selection")
+
+		// Use a consistent masking type as a safe default rather than weak randomness
+		return "web_browsing" // Most common type as safe default
+	}
+
 	return types[idx]
 }
 
 // simulateRealisticBrowsingSession simulates a realistic browsing session
-func (r *Ranker) simulateRealisticBrowsingSession(ctx context.Context, session *OrganicTestSession) {
+func (r *Ranker) simulateRealisticBrowsingSession(ctx context.Context, session *OrganicTestSession) error {
 	// Simulate multiple page visits with realistic timing
 	for range session.PageVisits {
 		// Add realistic delays between page visits (much shorter in tests)
 		var delay int
+		var err error
+
 		if isRunningInTest() {
-			delay, _ = engine.CryptoRandInt(1, 10) // 1-10 milliseconds for tests
+			delay, err = engine.CryptoRandInt(1, 10) // 1-10 milliseconds for tests
 		} else {
-			delay, _ = engine.CryptoRandInt(2000, 15000) // 2-15 seconds for production
+			delay, err = engine.CryptoRandInt(2000, 15000) // 2-15 seconds for production
 		}
+
+		if err != nil {
+			// CRITICAL: Never fall back to weak randomness
+			r.Logger.Error("CRYPTOGRAPHIC_FAILURE: Cannot generate secure random delay",
+				"error", err,
+				"context", "traffic_timing_obfuscation")
+
+			// In production, this is a security-critical failure
+			if !isRunningInTest() {
+				return fmt.Errorf("SECURITY_FAILURE: cryptographic randomness unavailable for traffic timing")
+			}
+
+			// In tests only, use a fixed safe value
+			delay = 100
+		}
+
 		time.Sleep(time.Duration(delay) * time.Millisecond)
-		
+
 		// Simulate page interaction (reading, scrolling, etc.)
 		if ctx.Err() != nil {
-			return
+			return ctx.Err()
 		}
 	}
+
+	return nil
 }
 
 // generatePreRequestActivity simulates realistic activity before a strategy test
 func (r *Ranker) generatePreRequestActivity(ctx context.Context, strategy *config.Fingerprint) {
 	// Simulate typing in address bar, DNS prefetch, etc.
 	var delay int
+	var err error
+
 	if isRunningInTest() {
-		delay, _ = engine.CryptoRandInt(1, 5) // 1-5 milliseconds for tests
+		delay, err = engine.CryptoRandInt(1, 5) // 1-5 milliseconds for tests
 	} else {
-		delay, _ = engine.CryptoRandInt(500, 3000) // 0.5-3 seconds for production
+		delay, err = engine.CryptoRandInt(500, 3000) // 0.5-3 seconds for production
 	}
+
+	if err != nil {
+		// CRITICAL: Never fall back to weak randomness
+		r.Logger.Error("CRYPTOGRAPHIC_FAILURE: Cannot generate secure random delay",
+			"error", err,
+			"context", "pre_request_activity")
+
+		// In production, this is a security-critical failure but continue with safe value
+		if isRunningInTest() {
+			delay = 3 // Middle value for tests
+		} else {
+			delay = 1500 // Middle value for production
+		}
+	}
+
 	time.Sleep(time.Duration(delay) * time.Millisecond)
 }
 
 // performDisguisedStrategyTest performs the actual strategy test disguised as normal traffic
 func (r *Ranker) performDisguisedStrategyTest(ctx context.Context, embeddedTest EmbeddedTest) (bool, time.Duration) {
 	start := time.Now()
-	
+
 	// Use existing test infrastructure but with disguised parameters
 	success, latency, err := r.testStrategy(ctx, embeddedTest.Strategy, []string{embeddedTest.TargetDomain})
-	
+
 	// Generate ephemeral correlation ID for this test session
 	correlationID := generateEphemeralCorrelationID()
 	if err != nil {
@@ -560,11 +782,28 @@ func (r *Ranker) performDisguisedStrategyTest(ctx context.Context, embeddedTest 
 func (r *Ranker) generatePostRequestActivity(ctx context.Context, strategy *config.Fingerprint, success bool) {
 	// Simulate continued browsing, cache operations, etc.
 	var delay int
+	var err error
+
 	if isRunningInTest() {
-		delay, _ = engine.CryptoRandInt(1, 5) // 1-5 milliseconds for tests
+		delay, err = engine.CryptoRandInt(1, 5) // 1-5 milliseconds for tests
 	} else {
-		delay, _ = engine.CryptoRandInt(1000, 8000) // 1-8 seconds for production
+		delay, err = engine.CryptoRandInt(1000, 8000) // 1-8 seconds for production
 	}
+
+	if err != nil {
+		// CRITICAL: Never fall back to weak randomness
+		r.Logger.Error("CRYPTOGRAPHIC_FAILURE: Cannot generate secure random delay",
+			"error", err,
+			"context", "post_request_activity")
+
+		// Use a conservative default value rather than weak randomness
+		if isRunningInTest() {
+			delay = 3 // Middle value for tests
+		} else {
+			delay = 4500 // Middle value for production
+		}
+	}
+
 	time.Sleep(time.Duration(delay) * time.Millisecond)
 }
 
