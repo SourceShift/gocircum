@@ -1,27 +1,27 @@
-doh_providers:
-  - name: "fully_decentralized_discovery"
-    discovery_mode: "multi_channel_cryptographic"
-    dga_config:
-      algorithm: "argon2id_sha3_based"
-      entropy_sources: ["system_random", "network_timing", "user_interaction"]
-      seed_rotation_interval: "2h"
-      domain_count: 100
-      validation_threshold: 3
-    steganographic_channels:
-      - platform: "twitter"
-        search_patterns: ["#tech_support_[0-9a-f]{8}", "#dev_tools_[0-9a-f]{8}"]
-        extraction_algorithm: "lsb_steganography"
-      - platform: "reddit"
-        subreddits: ["r/sysadmin", "r/networking"]
-        pattern: "DNS.*?([a-zA-Z0-9.-]+\\.doh\\.[a-z]{2,6})"
-    blockchain_discovery:
-      - network: "ethereum"
-        contract_address: "0x..." # Smart contract with provider list
-        validation_method: "merkle_proof"
-    peer_discovery:
-      bootstrap_method: "cryptographic_generation"
-      gossip_protocol: "tor_hidden_service"
-      peer_validation: "proof_of_work"
+# CRITICAL: No static domains or predictable patterns allowed
+# All discovery must be cryptographically generated and distributed
+discovery_config:
+  primary_method: "distributed_generation"
+  backup_methods: 
+    - "blockchain_consensus"
+    - "social_steganography" 
+    - "peer_gossip"
+  
+dga_config:
+  algorithms:
+    - name: "multi_entropy_blake3"  # More secure than SHA3
+      entropy_sources: 
+        - "tpm_hardware_rng"       # Hardware security module
+        - "network_timing_jitter"  # Network-based entropy
+        - "memory_access_patterns" # Memory timing entropy
+        - "interrupt_timing"       # System interrupt timing
+        - "thermal_sensor_noise"   # Physical entropy source
+      rotation_interval: "300s"    # 5-minute rotation for unpredictability
+      domain_count: 1000          # Larger pool for resilience
+      validation_threshold: 15    # Higher threshold against false positives
+      
+  # Remove all static fallback lists - these are security vulnerabilities
+  # fallback_domains: []  # REMOVED - violates security model
 
 canary_domains:
   - "www.cloudflare.com"

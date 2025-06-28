@@ -38,10 +38,20 @@ func NewTCPTransport(cfg *TCPConfig) (*TCPTransport, error) {
 	return t, nil
 }
 
-// DialContext connects to the given address using raw TCP. It no longer handles TLS.
-// TLS negotiation is now handled exclusively by higher-level components (e.g., engine.NewTLSClient)
-// to enforce the uTLS security policy.
+// DialContext connects to the given address using raw TCP with IP-only resolution.
+// SECURITY: This function MUST only be called with pre-resolved IP addresses to prevent DNS leakage.
 func (t *TCPTransport) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
+	// CRITICAL: Validate that address is already an IP, not a hostname
+	host, _, err := net.SplitHostPort(address)
+	if err != nil {
+		return nil, fmt.Errorf("invalid address format: %w", err)
+	}
+	
+	// Ensure we're connecting to an IP address, not a hostname
+	if net.ParseIP(host) == nil {
+		return nil, fmt.Errorf("SECURITY_VIOLATION: hostname passed to DialContext, must use pre-resolved IP: %s", host)
+	}
+	
 	conn, err := t.dialer.DialContext(ctx, network, address)
 	if err != nil {
 		return nil, fmt.Errorf("tcp dial failed: %w", err)

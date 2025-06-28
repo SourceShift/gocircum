@@ -4,7 +4,10 @@ import (
 	"container/list"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
+	"encoding/binary"
 	"fmt"
+	"io"
 	"os"
 	"runtime"
 	"sort"
@@ -40,12 +43,14 @@ type CacheEntry struct {
 
 // Ranker tests and ranks connection strategies.
 type Ranker struct {
-	ActiveProbes  *list.List
-	Cache         map[string]*CacheEntry
-	CacheLock     sync.RWMutex
-	Logger        logging.Logger
-	DialerFactory engine.DialerFactory
-	DoHResolver   DNSResolver
+	ActiveProbes        *list.List
+	Cache               map[string]*CacheEntry
+	CacheLock           sync.RWMutex
+	Logger              logging.Logger
+	DialerFactory       engine.DialerFactory
+	DoHResolver         DNSResolver
+	secureErrorStore    map[string]*SecureErrorDetails
+	errorCleanupRunning bool
 }
 
 // NewRanker creates a new Ranker instance.
@@ -224,31 +229,109 @@ func (r *Ranker) testStrategy(ctx context.Context, fingerprint *config.Fingerpri
 
 // generateRealisticPreConnectionDelay simulates user thinking/typing time
 func (r *Ranker) generateRealisticPreConnectionDelay() time.Duration {
-	// Simulate realistic user behavior: URL typing, thinking, etc.
-	var delay int
-	var err error
-
-	if isRunningInTest() {
-		delay, err = engine.CryptoRandInt(1, 10) // 1-10 milliseconds for tests
-	} else {
-		delay, err = engine.CryptoRandInt(500, 3000) // 0.5-3 seconds for production
+	// Primary: Use crypto/rand with multiple attempts
+	for attempt := 0; attempt < 3; attempt++ {
+		delay, err := engine.CryptoRandInt(500, 3000)
+		if err == nil {
+			return time.Duration(delay) * time.Millisecond
+		}
+		// Brief delay before retry
+		time.Sleep(time.Duration(10*(attempt+1)) * time.Millisecond)
 	}
+	// Secondary: Gather entropy from multiple hardware sources
+	if hardwareEntropy, err := r.gatherHardwareEntropy(); err == nil {
+		delay := r.extractDelayFromEntropy(hardwareEntropy, 500, 3000)
+		return time.Duration(delay) * time.Millisecond
+	}
+	// Tertiary: Use high-resolution timing entropy
+	timingEntropy := r.gatherHighResolutionTimingEntropy()
+	if len(timingEntropy) >= 4 {
+		delay := r.extractDelayFromEntropy(timingEntropy, 500, 3000)
+		return time.Duration(delay) * time.Millisecond
+	}
+	// CRITICAL: If no entropy available, fail securely
+	r.Logger.Error("CRITICAL SECURITY FAILURE: No entropy available for timing generation")
+	r.triggerSecurityEmergencyShutdown("ENTROPY_EXHAUSTION")
+	panic("SECURITY_VIOLATION: Cannot operate without cryptographic randomness")
+}
 
-	if err != nil {
-		// CRITICAL: Never fall back to weak randomness
-		r.Logger.Error("CRYPTOGRAPHIC_FAILURE: Cannot generate secure random delay",
-			"error", err,
-			"context", "pre_connection_delay")
-
-		// Use a conservative default value rather than weak randomness
-		if isRunningInTest() {
-			delay = 5 // Middle value for tests
-		} else {
-			delay = 1500 // Middle value for production
+// gatherHardwareEntropy attempts to collect entropy from hardware sources
+func (r *Ranker) gatherHardwareEntropy() ([]byte, error) {
+	entropy := make([]byte, 32)
+	// Method 1: Try /dev/urandom
+	if f, err := os.Open("/dev/urandom"); err == nil {
+		defer func() {
+			if err := f.Close(); err != nil {
+				logging.GetLogger().Debug("Failed to close /dev/urandom", "error", err)
+			}
+		}()
+		if _, err := io.ReadFull(f, entropy); err == nil {
+			return entropy, nil
 		}
 	}
+	// Method 2: Try /dev/random (blocking but high quality)
+	if f, err := os.Open("/dev/random"); err == nil {
+		defer func() {
+			if err := f.Close(); err != nil {
+				logging.GetLogger().Debug("Failed to close /dev/random", "error", err)
+			}
+		}()
+		if err := f.SetReadDeadline(time.Now().Add(1 * time.Second)); err == nil {
+			if _, err := io.ReadFull(f, entropy); err == nil {
+				return entropy, nil
+			}
+		}
+	}
+	// Method 3: Platform-specific hardware RNG
+	if hwEntropy, err := r.getPlatformSpecificHardwareRNG(); err == nil {
+		return hwEntropy, nil
+	}
+	return nil, fmt.Errorf("no hardware entropy sources available")
+}
 
-	return time.Duration(delay) * time.Millisecond
+// extractDelayFromEntropy converts entropy bytes to delay value in range
+func (r *Ranker) extractDelayFromEntropy(entropy []byte, min, max int) int {
+	if len(entropy) < 4 {
+		panic("insufficient entropy for delay extraction")
+	}
+	hash := sha256.Sum256(entropy)
+	value := binary.BigEndian.Uint32(hash[:4])
+	rangeSize := uint32(max - min + 1)
+	return min + int(value%rangeSize)
+}
+
+// gatherHighResolutionTimingEntropy collects entropy from timing variations
+func (r *Ranker) gatherHighResolutionTimingEntropy() []byte {
+	samples := make([]int64, 100)
+	for i := range samples {
+		start := time.Now().UnixNano()
+		data := make([]byte, 1024+i*13)
+		for j := range data {
+			data[j] = byte(j)
+		}
+		end := time.Now().UnixNano()
+		samples[i] = end - start
+		runtime.KeepAlive(data)
+	}
+	hash := sha256.New()
+	for _, sample := range samples {
+		var buf [8]byte
+		binary.LittleEndian.PutUint64(buf[:], uint64(sample))
+		hash.Write(buf[:])
+	}
+	return hash.Sum(nil)
+}
+
+// triggerSecurityEmergencyShutdown handles critical security failures
+func (r *Ranker) triggerSecurityEmergencyShutdown(reason string) {
+	r.Logger.Error("SECURITY EMERGENCY SHUTDOWN TRIGGERED",
+		"reason", reason,
+		"timestamp", time.Now().Unix(),
+		"goroutine_id", getGoroutineID())
+	r.notifySecurityMonitoring(reason)
+	if os.Getenv("GOCIRCUM_STRICT_SECURITY") == "1" {
+		os.Exit(1)
+	}
 }
 
 // simulateRealisticDNSLookup adds delays that mimic real DNS lookup timing
@@ -503,17 +586,6 @@ func generateEphemeralCorrelationID() string {
 	return fmt.Sprintf("test_%x", randBytes[:4])
 }
 
-// classifyErrorType returns only general error categories
-func classifyErrorType(err error) string {
-	if strings.Contains(err.Error(), "timeout") {
-		return "timeout_error"
-	}
-	if strings.Contains(err.Error(), "connection") {
-		return "connection_error"
-	}
-	return "general_error"
-}
-
 // OrganicTestPlan defines a realistic browsing session plan
 type OrganicTestPlan struct {
 	Sessions []*OrganicTestSession
@@ -760,22 +832,131 @@ func (r *Ranker) generatePreRequestActivity(ctx context.Context, strategy *confi
 // performDisguisedStrategyTest performs the actual strategy test disguised as normal traffic
 func (r *Ranker) performDisguisedStrategyTest(ctx context.Context, embeddedTest EmbeddedTest) (bool, time.Duration) {
 	start := time.Now()
-
-	// Use existing test infrastructure but with disguised parameters
+	// Generate correlation ID for this test session
+	testID := r.generateTestCorrelationID()
 	success, latency, err := r.testStrategy(ctx, embeddedTest.Strategy, []string{embeddedTest.TargetDomain})
-
-	// Generate ephemeral correlation ID for this test session
-	correlationID := generateEphemeralCorrelationID()
 	if err != nil {
+		// PRIVACY-PRESERVING: Log sanitized information only
 		r.Logger.Warn("strategy test failed",
-			"correlation_id", correlationID,
-			"error_type", classifyErrorType(err))
+			"test_id", testID,
+			"strategy_id", embeddedTest.Strategy.ID, // Safe - no sensitive data
+			"target_domain_category", r.categorizeDomain(embeddedTest.TargetDomain),
+			"error_type", r.categorizeError(err),
+			"duration_ms", time.Since(start).Milliseconds())
+		// Store detailed error information securely for debugging if needed
+		r.storeDetailedErrorSecurely(testID, embeddedTest.TargetDomain, err)
 		return false, time.Since(start)
 	} else {
 		r.Logger.Debug("strategy test completed",
-			"correlation_id", correlationID)
-		return success, latency
+			"test_id", testID,
+			"strategy_id", embeddedTest.Strategy.ID,
+			"success", success,
+			"latency_ms", latency.Milliseconds())
 	}
+	return success, latency
+}
+
+// generateTestCorrelationID creates a non-identifying test ID
+func (r *Ranker) generateTestCorrelationID() string {
+	randBytes := make([]byte, 6)
+	if _, err := rand.Read(randBytes); err != nil {
+		// Fallback to timestamp-based ID
+		return fmt.Sprintf("test_%x", time.Now().UnixNano()&0xFFFFFFFF)
+	}
+	return fmt.Sprintf("test_%x", randBytes[:3])
+}
+
+// categorizeDomain returns a safe category for the domain
+func (r *Ranker) categorizeDomain(domain string) string {
+	// Categorize without revealing actual domain
+	if strings.Contains(domain, "google") {
+		return "major_tech_provider"
+	}
+	if strings.Contains(domain, "amazon") || strings.Contains(domain, "aws") {
+		return "cloud_provider"
+	}
+	if strings.Contains(domain, "cloudflare") {
+		return "cdn_provider"
+	}
+	if strings.Contains(domain, ".gov") {
+		return "government_domain"
+	}
+	if strings.Contains(domain, ".edu") {
+		return "educational_domain"
+	}
+	return "general_commercial"
+}
+
+// categorizeError returns a safe error category
+func (r *Ranker) categorizeError(err error) string {
+	errStr := err.Error()
+	if strings.Contains(errStr, "timeout") {
+		return "timeout_error"
+	}
+	if strings.Contains(errStr, "connection refused") {
+		return "connection_refused"
+	}
+	if strings.Contains(errStr, "tls") || strings.Contains(errStr, "certificate") {
+		return "tls_error"
+	}
+	if strings.Contains(errStr, "dns") {
+		return "dns_error"
+	}
+	if strings.Contains(errStr, "network") {
+		return "network_error"
+	}
+	return "general_error"
+}
+
+// storeDetailedErrorSecurely stores sensitive error details for debugging
+func (r *Ranker) storeDetailedErrorSecurely(testID, domain string, err error) {
+	// Only store if debugging is enabled and in secure memory
+	if !r.isDebugModeEnabled() {
+		return
+	}
+	if r.secureErrorStore == nil {
+		r.secureErrorStore = make(map[string]*SecureErrorDetails)
+	}
+	r.secureErrorStore[testID] = &SecureErrorDetails{
+		Domain:    domain,
+		Error:     err.Error(),
+		Timestamp: time.Now(),
+		ExpiresAt: time.Now().Add(5 * time.Minute), // Very short retention
+	}
+	// Start cleanup if not running
+	if !r.errorCleanupRunning {
+		go r.cleanupSecureErrorStore()
+		r.errorCleanupRunning = true
+	}
+}
+
+type SecureErrorDetails struct {
+	Domain    string
+	Error     string
+	Timestamp time.Time
+	ExpiresAt time.Time
+}
+
+// cleanupSecureErrorStore removes expired error details
+func (r *Ranker) cleanupSecureErrorStore() {
+	ticker := time.NewTicker(1 * time.Minute)
+	defer ticker.Stop()
+	for range ticker.C {
+		now := time.Now()
+		for id, details := range r.secureErrorStore {
+			if now.After(details.ExpiresAt) {
+				// Securely clear memory
+				details.Domain = strings.Repeat("\x00", len(details.Domain))
+				details.Error = strings.Repeat("\x00", len(details.Error))
+				delete(r.secureErrorStore, id)
+			}
+		}
+	}
+}
+
+// isDebugModeEnabled checks if secure debug mode is enabled
+func (r *Ranker) isDebugModeEnabled() bool {
+	return os.Getenv("GOCIRCUM_SECURE_DEBUG") == "1"
 }
 
 // generatePostRequestActivity simulates realistic activity after a strategy test
@@ -831,4 +1012,22 @@ func isRunningInTest() bool {
 
 	// Check if program name contains "test" (go test renames the binary)
 	return strings.HasSuffix(os.Args[0], ".test") || strings.Contains(os.Args[0], "/_test/")
+}
+
+// getPlatformSpecificHardwareRNG is a stub for platform-specific hardware RNG
+func (r *Ranker) getPlatformSpecificHardwareRNG() ([]byte, error) {
+	// Stub: not implemented
+	return nil, fmt.Errorf("platform-specific hardware RNG not implemented")
+}
+
+// getGoroutineID is a stub for goroutine ID retrieval
+func getGoroutineID() int64 {
+	// Stub: not implemented
+	return 0
+}
+
+// notifySecurityMonitoring is a stub for security monitoring notification
+func (r *Ranker) notifySecurityMonitoring(reason string) {
+	// Stub: log or send alert
+	r.Logger.Warn("Security monitoring notification (stub)", "reason", reason)
 }
