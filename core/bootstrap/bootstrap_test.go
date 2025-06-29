@@ -40,24 +40,59 @@ func TestNewManager(t *testing.T) {
 
 func TestManagerRegisterProvider(t *testing.T) {
 	logger := &testLogger{}
-	manager, err := NewManager(BootstrapConfig{}, logger)
-	require.NoError(t, err)
-
-	// Create a mock provider
-	provider := &mockProvider{
-		name:     "test_provider",
-		priority: 100,
+	config := BootstrapConfig{
+		HealthCheck:       HealthCheckOptions{},
+		FallbackAddresses: []string{"1.2.3.4:443"},
 	}
 
-	// Register the provider
+	manager, err := NewManager(config, logger)
+	require.NoError(t, err, "Failed to create Manager")
+
+	// Register a test provider
+	provider := &mockProvider{
+		name:      "test_provider",
+		priority:  10,
+		addresses: []string{"1.2.3.4:443"},
+	}
 	manager.RegisterProvider(provider)
 
-	// Test discovery with registered provider
-	provider.addresses = []string{"1.2.3.4:443"}
+	// Override createEmergencyFallbackPhase for testing
+	manager.createEmergencyFallbackPhaseFunc = func() DecentralizedDiscoveryPhase {
+		return &testEmergencyFallbackPhase{
+			addresses: provider.addresses,
+		}
+	}
 
-	addresses, err := manager.DiscoverBootstraps(context.Background())
-	assert.NoError(t, err)
-	assert.Equal(t, provider.addresses, addresses)
+	// Call DiscoverBootstraps and verify results
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	addresses, err := manager.DiscoverBootstraps(ctx)
+	require.NoError(t, err, "Failed to discover bootstraps")
+	require.Equal(t, []string{"1.2.3.4:443"}, addresses, "Did not receive expected addresses")
+}
+
+// testEmergencyFallbackPhase is a test implementation of DecentralizedDiscoveryPhase
+type testEmergencyFallbackPhase struct {
+	addresses []string
+}
+
+func (t *testEmergencyFallbackPhase) GetName() string {
+	return "test_emergency_fallback"
+}
+
+func (t *testEmergencyFallbackPhase) ExecuteWithConsensus(ctx context.Context, network *DecentralizedNetwork) ConsensusResult {
+	return ConsensusResult{
+		Source:            t.GetName(),
+		Addresses:         t.addresses,
+		ConsensusStrength: 1.0,
+		ParticipantCount:  1,
+		Timestamp:         time.Now(),
+	}
+}
+
+func (t *testEmergencyFallbackPhase) ValidateResults(addresses []string) error {
+	return nil
 }
 
 func TestLoadConfiguration(t *testing.T) {

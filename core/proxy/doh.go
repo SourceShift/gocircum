@@ -123,10 +123,10 @@ func (r *DoHResolver) getDynamicProviders(ctx context.Context) ([]config.DoHProv
 		r.discoverP2PProviders,
 		r.discoverSocialMediaProviders,
 	}
-	
+
 	// Execute all discovery methods in parallel
 	resultsChan := make(chan discoveryResult, len(discoveryChannels))
-	
+
 	for _, method := range discoveryChannels {
 		go func(discoveryMethod func(context.Context) ([]config.DoHProvider, error)) {
 			providers, err := discoveryMethod(ctx)
@@ -136,11 +136,11 @@ func (r *DoHResolver) getDynamicProviders(ctx context.Context) ([]config.DoHProv
 			}
 		}(method)
 	}
-	
+
 	// Collect results with timeout
 	timeout := time.After(30 * time.Second)
 	successfulChannels := 0
-	
+
 	for i := 0; i < len(discoveryChannels); i++ {
 		select {
 		case result := <-resultsChan:
@@ -149,30 +149,30 @@ func (r *DoHResolver) getDynamicProviders(ctx context.Context) ([]config.DoHProv
 				r.logger.Warn("Discovery channel failed", "error", result.err)
 				continue
 			}
-			
+
 			// Validate providers before adding
 			validProviders := r.validateProviderSecurity(result.providers)
 			if len(validProviders) > 0 {
 				allProviders = append(allProviders, validProviders...)
 				successfulChannels++
 			}
-			
+
 		case <-timeout:
 			r.logger.Error("Discovery timeout reached")
 			goto exitLoop
 		}
 	}
-	
+
 exitLoop:
 	// CRITICAL: Require minimum number of successful discovery channels
 	if successfulChannels < 2 {
 		return nil, fmt.Errorf("insufficient discovery channels succeeded: %d < 2 required", successfulChannels)
 	}
-	
+
 	if len(allProviders) == 0 {
 		return nil, fmt.Errorf("no valid providers discovered through any channel: %v", discoveryErrors)
 	}
-	
+
 	// Apply final validation and shuffling
 	finalProviders := r.applyProviderDiversityFiltering(allProviders)
 	return r.secureShuffleProviders(finalProviders), nil
@@ -503,6 +503,8 @@ func (r *DoHResolver) discoverP2PProviders(ctx context.Context) ([]config.DoHPro
 }
 
 // validateProviderHealth checks the health of discovered providers
+//
+//nolint:unused // Will be used when implementing provider health validation
 func (r *DoHResolver) validateProviderHealth(ctx context.Context, providers []config.DoHProvider) []config.DoHProvider {
 	logger := logging.GetLogger()
 	var validProviders []config.DoHProvider
@@ -677,6 +679,8 @@ func abs(x int) int {
 }
 
 // generateDecoyQueries generates decoy DoH queries to mask usage patterns
+//
+//nolint:unused // Will be used for traffic pattern obfuscation
 func (r *DoHResolver) generateDecoyQueries(ctx context.Context, providers []config.DoHProvider) {
 	logger := logging.GetLogger()
 
@@ -1185,23 +1189,23 @@ func (r *DoHResolver) discoverSocialMediaProviders(ctx context.Context) ([]confi
 // validateProviderSecurity performs security validation on discovered providers
 func (r *DoHResolver) validateProviderSecurity(providers []config.DoHProvider) []config.DoHProvider {
 	var validProviders []config.DoHProvider
-	
+
 	for _, provider := range providers {
 		// Check domain isn't obviously suspicious
 		if r.isProviderSuspicious(provider) {
 			r.logger.Warn("Rejecting suspicious provider", "name", provider.Name)
 			continue
 		}
-		
+
 		// Verify TLS connectivity
 		if !r.validateTLSConnectivity(provider) {
 			r.logger.Warn("Provider failed TLS validation", "name", provider.Name)
 			continue
 		}
-		
+
 		validProviders = append(validProviders, provider)
 	}
-	
+
 	return validProviders
 }
 
@@ -1211,16 +1215,16 @@ func (r *DoHResolver) isProviderSuspicious(provider config.DoHProvider) bool {
 	suspiciousPatterns := []string{
 		"vpn", "proxy", "tor", "tunnel", "unblock", "bypass", "circumvent",
 	}
-	
+
 	name := strings.ToLower(provider.Name)
 	url := strings.ToLower(provider.URL)
-	
+
 	for _, pattern := range suspiciousPatterns {
 		if strings.Contains(name, pattern) || strings.Contains(url, pattern) {
 			return true
 		}
 	}
-	
+
 	return false
 }
 
@@ -1231,23 +1235,28 @@ func (r *DoHResolver) validateTLSConnectivity(provider config.DoHProvider) bool 
 	if err != nil {
 		return false
 	}
-	
+
 	// Quick TLS connectivity test
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	
+
 	conn, err := (&net.Dialer{}).DialContext(ctx, "tcp", net.JoinHostPort(u.Host, "443"))
 	if err != nil {
 		return false
 	}
-	defer conn.Close()
-	
+	defer func() {
+		if closeErr := conn.Close(); closeErr != nil {
+			// Log error but continue since this is just a validation check
+			r.logger.Debug("Error closing connection during TLS validation", "error", closeErr)
+		}
+	}()
+
 	// Verify TLS handshake
 	tlsConn := tls.Client(conn, &tls.Config{
 		ServerName:         u.Host,
 		InsecureSkipVerify: false,
 	})
-	
+
 	err = tlsConn.Handshake()
 	return err == nil
 }
@@ -1257,7 +1266,7 @@ func (r *DoHResolver) applyProviderDiversityFiltering(providers []config.DoHProv
 	// Remove duplicate providers and ensure geographic/organizational diversity
 	seen := make(map[string]bool)
 	var filtered []config.DoHProvider
-	
+
 	for _, provider := range providers {
 		// Use URL as uniqueness key
 		if !seen[provider.URL] {
@@ -1265,6 +1274,6 @@ func (r *DoHResolver) applyProviderDiversityFiltering(providers []config.DoHProv
 			filtered = append(filtered, provider)
 		}
 	}
-	
+
 	return filtered
 }
