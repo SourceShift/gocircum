@@ -257,3 +257,62 @@ Contributions are highly welcome! Whether you're adding new evasion strategies, 
 ## License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+## Security Improvements
+
+The latest update introduces several critical security improvements:
+
+### 1. Secure Configuration Storage
+- **Encrypted Configuration Files**: Configuration files can now be encrypted using AES-GCM with keys derived from passwords using Argon2id.
+- **Command-Line Tool**: Use the `encrypt-config` command to secure your configuration files.
+- **Automatic Detection**: The CLI automatically detects encrypted configuration files (`.enc.yaml` extension) and prompts for passwords.
+
+### 2. Dynamic Service Discovery
+- **Removed Hardcoded Domains**: Service discovery no longer uses hardcoded domains, which were a security vulnerability.
+- **Domain Generation Algorithm (DGA)**: Implements a secure DGA with multiple entropy sources.
+- **Distributed Generation**: Primary discovery method uses distributed generation with backup methods including blockchain consensus and peer gossip.
+
+### 3. DNS Leak Prevention
+- **Transport Interface Improvements**: Updated to use pre-resolved IP addresses instead of hostnames.
+- **DNS Resolution Protection**: Comprehensive protections against DNS leaks at multiple levels.
+- **IP Validation**: Includes checks against private/internal IP ranges to prevent DNS poisoning.
+
+### 4. Traffic Obfuscation
+- **Realistic Traffic Mimicry**: Traffic fragmentation now mimics realistic browser patterns.
+- **Random Delays and Sizes**: Implements variable packet sizes and timing to evade detection.
+- **Dynamic Adaptation**: Adjusts traffic patterns based on network conditions and threat levels.
+
+## Usage
+
+### Basic Usage
+```
+gocircum-cli proxy -config strategies.yaml
+```
+
+### Using Encrypted Configuration
+```
+# First, encrypt your configuration file
+gocircum-cli encrypt-config strategies.yaml strategies.enc.yaml
+
+# Then use the encrypted file
+gocircum-cli proxy -config strategies.enc.yaml
+```
+
+### Testing Available Strategies
+```
+gocircum-cli test -config strategies.yaml
+```
+
+## Security Best Practices
+
+1. **Always use encrypted configuration files** in production environments.
+2. **Store passwords securely** - if a password is lost, the configuration cannot be recovered.
+3. **Regularly rotate configurations** and use unique passwords for each rotation.
+4. **Do not share configuration files** containing sensitive information or credentials.
+5. **Use dynamic discovery methods** rather than hardcoded domains when possible.
+
+## Building from Source
+
+```
+go build -o gocircum-cli ./cli
+```

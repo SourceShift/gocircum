@@ -79,9 +79,8 @@ func TestEngine_ProxyLifecycle(t *testing.T) {
 		ID:          "test-tcp-secure",
 		Description: "Test TCP Secure",
 		DomainFronting: &config.DomainFronting{
-			Enabled:      true,
-			FrontDomain:  "example.com",
-			CovertTarget: "covert.example.com",
+			Enabled:         true,
+			DiscoveryMethod: "dga",
 		},
 		Transport: config.Transport{Protocol: "tcp"},
 		TLS: config.TLS{
@@ -134,9 +133,8 @@ func TestEngine_ProxyFailure(t *testing.T) {
 		ID:          "test-tcp-failure",
 		Description: "Test TCP Failure",
 		DomainFronting: &config.DomainFronting{
-			Enabled:      true,
-			FrontDomain:  "example.com",
-			CovertTarget: "covert.example.com",
+			Enabled:         true,
+			DiscoveryMethod: "dga",
 		},
 		Transport: config.Transport{Protocol: "tcp"},
 		TLS: config.TLS{
@@ -242,9 +240,8 @@ func TestEngine_GetBestStrategy(t *testing.T) {
 		ID:          "test-strategy-for-ranking",
 		Description: "A valid strategy for the ranking test",
 		DomainFronting: &config.DomainFronting{
-			Enabled:      true,
-			FrontDomain:  "example.com",
-			CovertTarget: "covert.example.com",
+			Enabled:         true,
+			DiscoveryMethod: "dga",
 		},
 		Transport: config.Transport{Protocol: "tcp"},
 		TLS: config.TLS{
@@ -259,9 +256,8 @@ func TestEngine_GetBestStrategy(t *testing.T) {
 		ID:          "invalid-strategy",
 		Description: "An invalid strategy that should fail ranking",
 		DomainFronting: &config.DomainFronting{
-			Enabled:      true,
-			FrontDomain:  "example.com",
-			CovertTarget: "covert.example.com",
+			Enabled:         true,
+			DiscoveryMethod: "dga",
 		},
 		Transport: config.Transport{Protocol: "tcp"},
 		TLS: config.TLS{
@@ -364,9 +360,8 @@ func TestEngine_DomainFronting(t *testing.T) {
 		ID:          "test-df",
 		Description: "Test Domain Fronting",
 		DomainFronting: &config.DomainFronting{
-			Enabled:      true,
-			FrontDomain:  listener.Addr().String(),
-			CovertTarget: "covert.example.com:443",
+			Enabled:         true,
+			DiscoveryMethod: "dga",
 		},
 		Transport: config.Transport{Protocol: "tcp"},
 		TLS: config.TLS{
@@ -411,9 +406,8 @@ func TestEngine_NewProxyForStrategy(t *testing.T) {
 	fp := config.Fingerprint{
 		ID: "test-tcp-secure",
 		DomainFronting: &config.DomainFronting{
-			Enabled:      true,
-			FrontDomain:  "example.com",
-			CovertTarget: "covert.example.com",
+			Enabled:         true,
+			DiscoveryMethod: "dga",
 		},
 		Transport: config.Transport{
 			Protocol: "tcp",

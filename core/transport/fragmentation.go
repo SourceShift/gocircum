@@ -660,8 +660,8 @@ type fragmentingTransport struct {
 }
 
 // DialContext wraps the established connection with fragmentation logic.
-func (t *fragmentingTransport) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
-	conn, err := t.Transport.DialContext(ctx, network, address)
+func (t *fragmentingTransport) DialContext(ctx context.Context, network string, ip net.IP, port int) (net.Conn, error) {
+	conn, err := t.Transport.DialContext(ctx, network, ip, port)
 	if err != nil {
 		return nil, fmt.Errorf("dial for fragmentation failed: %w", err)
 	}

@@ -57,32 +57,32 @@ func (mr *MockTransportMockRecorder) Close() *gomock.Call {
 }
 
 // DialContext mocks base method.
-func (m *MockTransport) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
+func (m *MockTransport) DialContext(ctx context.Context, network string, ip net.IP, port int) (net.Conn, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "DialContext", ctx, network, address)
+	ret := m.ctrl.Call(m, "DialContext", ctx, network, ip, port)
 	ret0, _ := ret[0].(net.Conn)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // DialContext indicates an expected call of DialContext.
-func (mr *MockTransportMockRecorder) DialContext(ctx, network, address any) *gomock.Call {
+func (mr *MockTransportMockRecorder) DialContext(ctx, network, ip, port any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DialContext", reflect.TypeOf((*MockTransport)(nil).DialContext), ctx, network, address)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DialContext", reflect.TypeOf((*MockTransport)(nil).DialContext), ctx, network, ip, port)
 }
 
 // GenerateDecoyTraffic mocks base method.
-func (m *MockTransport) GenerateDecoyTraffic(ctx context.Context, targetAddr string) error {
+func (m *MockTransport) GenerateDecoyTraffic(ctx context.Context, targetIP net.IP, targetPort int) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GenerateDecoyTraffic", ctx, targetAddr)
+	ret := m.ctrl.Call(m, "GenerateDecoyTraffic", ctx, targetIP, targetPort)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // GenerateDecoyTraffic indicates an expected call of GenerateDecoyTraffic.
-func (mr *MockTransportMockRecorder) GenerateDecoyTraffic(ctx, targetAddr any) *gomock.Call {
+func (mr *MockTransportMockRecorder) GenerateDecoyTraffic(ctx, targetIP, targetPort any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GenerateDecoyTraffic", reflect.TypeOf((*MockTransport)(nil).GenerateDecoyTraffic), ctx, targetAddr)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GenerateDecoyTraffic", reflect.TypeOf((*MockTransport)(nil).GenerateDecoyTraffic), ctx, targetIP, targetPort)
 }
 
 // GetFingerprint mocks base method.

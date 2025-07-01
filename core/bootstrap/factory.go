@@ -64,12 +64,8 @@ func LoadConfiguration(path string) (*BootstrapConfig, error) {
 		return nil, fmt.Errorf("failed to parse bootstrap config: %w", err)
 	}
 
-	// Check if fallback_addresses is present and log a warning
-	if _, exists := configMap["fallback_addresses"]; exists {
-		// In a real implementation, this would use the structured logger
-		// Just removing silently for now as this is a security enhancement
-		delete(configMap, "fallback_addresses")
-	}
+	// Check for fallback_addresses and remove it
+	delete(configMap, "fallback_addresses")
 
 	// Now unmarshal into the actual struct
 	var config BootstrapConfig

@@ -10,10 +10,10 @@
 package mocks
 
 import (
-	config "github.com/gocircum/gocircum/core/config"
-	engine "github.com/gocircum/gocircum/core/engine"
 	reflect "reflect"
 
+	config "github.com/gocircum/gocircum/core/config"
+	engine "github.com/gocircum/gocircum/core/engine"
 	gomock "go.uber.org/mock/gomock"
 )
 

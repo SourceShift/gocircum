@@ -6,7 +6,12 @@ import (
 	"fmt"
 	"math/big"
 	"net"
+	"runtime"
+	"runtime/debug"
+	"strconv"
 	"time"
+
+	"github.com/gocircum/gocircum/pkg/logging"
 )
 
 // TCPConfig contains configuration options for the TCP transport.
@@ -18,10 +23,10 @@ type TCPConfig struct {
 
 // TCPTransport is a transport that uses TCP with obfuscation capabilities.
 type TCPTransport struct {
-	dialer            *net.Dialer
-	obfuscationTarget ObfuscationTarget
+	dialer             *net.Dialer
+	obfuscationTarget  ObfuscationTarget
 	obfuscationEnabled bool
-	decoyTrafficRate  time.Duration
+	decoyTrafficRate   time.Duration
 }
 
 // NewTCPTransport creates a new TCPTransport with the given configuration.
@@ -38,20 +43,30 @@ func NewTCPTransport(cfg *TCPConfig) (*TCPTransport, error) {
 	return t, nil
 }
 
-// DialContext connects to the given address using raw TCP with IP-only resolution.
-// SECURITY: This function MUST only be called with pre-resolved IP addresses to prevent DNS leakage.
-func (t *TCPTransport) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
-	// CRITICAL: Validate that address is already an IP, not a hostname
-	host, _, err := net.SplitHostPort(address)
-	if err != nil {
-		return nil, fmt.Errorf("invalid address format: %w", err)
+// DialContext connects to the given pre-resolved IP address using raw TCP.
+func (t *TCPTransport) DialContext(ctx context.Context, network string, ip net.IP, port int) (net.Conn, error) {
+	// The check for hostname is no longer needed due to the change in function signature.
+	// It is now architecturally impossible to pass a hostname here.
+
+	// Validate IP address as an additional security measure
+	if ip == nil {
+		pc, file, line, _ := runtime.Caller(1)
+		logging.GetLogger().Error("SECURITY_VIOLATION: nil IP address",
+			"stack_trace", string(debug.Stack()),
+			"caller_file", file,
+			"caller_line", line,
+			"caller_func", runtime.FuncForPC(pc).Name())
+		return nil, fmt.Errorf("SECURITY_VIOLATION: nil IP address")
 	}
-	
-	// Ensure we're connecting to an IP address, not a hostname
-	if net.ParseIP(host) == nil {
-		return nil, fmt.Errorf("SECURITY_VIOLATION: hostname passed to DialContext, must use pre-resolved IP: %s", host)
+
+	// Secondary validation: Check for private/internal IPs that indicate DNS poisoning
+	if ip.IsPrivate() || ip.IsLoopback() || ip.IsUnspecified() {
+		return nil, fmt.Errorf("SECURITY_VIOLATION: invalid IP address indicates DNS poisoning: %s", ip.String())
 	}
-	
+
+	// Construct the address string from the IP and port.
+	address := net.JoinHostPort(ip.String(), strconv.Itoa(port))
+
 	conn, err := t.dialer.DialContext(ctx, network, address)
 	if err != nil {
 		return nil, fmt.Errorf("tcp dial failed: %w", err)
@@ -137,10 +152,18 @@ func (t *TCPTransport) GetFingerprint() TransportFingerprint {
 }
 
 // GenerateDecoyTraffic creates realistic background traffic to mask real connections
-func (t *TCPTransport) GenerateDecoyTraffic(ctx context.Context, targetAddr string) error {
+func (t *TCPTransport) GenerateDecoyTraffic(ctx context.Context, targetIP net.IP, targetPort int) error {
 	if !t.obfuscationEnabled || t.decoyTrafficRate == 0 {
 		return nil // Decoy traffic disabled
 	}
+
+	// Ensure the target IP is valid
+	if targetIP == nil {
+		return fmt.Errorf("invalid target IP for decoy traffic")
+	}
+
+	// Construct target address
+	targetAddr := net.JoinHostPort(targetIP.String(), strconv.Itoa(targetPort))
 
 	go func() {
 		ticker := time.NewTicker(t.decoyTrafficRate)
@@ -181,7 +204,7 @@ func (t *TCPTransport) getObfuscationLevel() ObfuscationLevel {
 	if !t.obfuscationEnabled {
 		return ObfuscationNone
 	}
-	
+
 	switch t.obfuscationTarget {
 	case ObfuscateAsHTTP, ObfuscateAsSSH:
 		return ObfuscationBasic
@@ -208,7 +231,7 @@ func (t *TCPTransport) generateSingleDecoyConnection(targetAddr string) error {
 	data := t.generateDecoyData()
 	if len(data) > 0 {
 		_, _ = conn.Write(data)
-		
+
 		// Wait for a realistic amount of time
 		delay := t.generateRealisticDelay()
 		time.Sleep(delay)

@@ -59,7 +59,13 @@ func TestFragmentationMiddleware(t *testing.T) {
 	fragMW := FragmentationMiddleware(fragmentSize, fragmentDelay)
 	wrappedTransport := fragMW(baseTransport)
 
-	conn, err := wrappedTransport.DialContext(context.Background(), "tcp", listener.Addr().String())
+	// Parse the address into IP and port
+	tcpAddr, ok := listener.Addr().(*net.TCPAddr)
+	if !ok {
+		t.Fatalf("Could not convert to TCPAddr: %v", listener.Addr())
+	}
+
+	conn, err := wrappedTransport.DialContext(context.Background(), "tcp", tcpAddr.IP, tcpAddr.Port)
 	if err != nil {
 		t.Fatalf("Dial failed: %v", err)
 	}

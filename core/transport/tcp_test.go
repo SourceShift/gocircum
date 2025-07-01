@@ -12,6 +12,7 @@ import (
 	"io"
 	"math/big"
 	"net"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -51,7 +52,11 @@ func TestTCPTransport_Dial(t *testing.T) {
 	}
 
 	// Dial the server
-	conn, err := transport.DialContext(context.Background(), "tcp", server.Addr().String())
+	tcpAddr, ok := server.Addr().(*net.TCPAddr)
+	if !ok {
+		t.Fatalf("Could not convert to TCPAddr: %v", server.Addr())
+	}
+	conn, err := transport.DialContext(context.Background(), "tcp", tcpAddr.IP, tcpAddr.Port)
 	if err != nil {
 		t.Fatalf("Dial failed: %v", err)
 	}
@@ -124,7 +129,11 @@ func TestTCPTransport_DialTLS(t *testing.T) {
 	}
 
 	// Dial the TLS server
-	conn, err := transport.DialContext(context.Background(), "tcp", server.Addr().String())
+	tcpAddr, ok := server.Addr().(*net.TCPAddr)
+	if !ok {
+		t.Fatalf("Could not convert to TCPAddr: %v", server.Addr())
+	}
+	conn, err := transport.DialContext(context.Background(), "tcp", tcpAddr.IP, tcpAddr.Port)
 	if err != nil {
 		t.Fatalf("Dial failed: %v", err)
 	}
@@ -181,7 +190,12 @@ func BenchmarkTCPTransport_Dial(b *testing.B) {
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			conn, err := transport.DialContext(context.Background(), "tcp", server.Addr().String())
+			tcpAddr, ok := server.Addr().(*net.TCPAddr)
+			if !ok {
+				b.Logf("Could not convert to TCPAddr: %v", server.Addr())
+				continue
+			}
+			conn, err := transport.DialContext(context.Background(), "tcp", tcpAddr.IP, tcpAddr.Port)
 			if err != nil {
 				// Don't fatal in a parallel benchmark
 				b.Logf("Dial failed: %v", err)
@@ -239,7 +253,18 @@ func TestTCPTransport_DialContext_ErrorWrapping(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*50)
 	defer cancel()
 
-	_, err = tcpTransport.DialContext(ctx, "tcp", nonRoutableAddress)
+	// Parse the IP address and port
+	host, portStr, err := net.SplitHostPort(nonRoutableAddress)
+	if err != nil {
+		t.Fatalf("Failed to split host and port: %v", err)
+	}
+	port, err := strconv.Atoi(portStr)
+	if err != nil {
+		t.Fatalf("Failed to convert port to integer: %v", err)
+	}
+	ip := net.ParseIP(host)
+
+	_, err = tcpTransport.DialContext(ctx, "tcp", ip, port)
 
 	assert.Error(t, err)
 

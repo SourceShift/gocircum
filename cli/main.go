@@ -6,12 +6,14 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"text/tabwriter"
 
 	"github.com/gocircum/gocircum/core"
 	"github.com/gocircum/gocircum/core/config"
 	"github.com/gocircum/gocircum/pkg/logging"
+	"golang.org/x/term"
 )
 
 func printUsage(globalFlags *flag.FlagSet) {
@@ -21,8 +23,9 @@ func printUsage(globalFlags *flag.FlagSet) {
 	globalFlags.SetOutput(os.Stderr)
 	globalFlags.PrintDefaults()
 	fmt.Fprintf(os.Stderr, "\nCommands:\n")
-	fmt.Fprintf(os.Stderr, "  proxy    Run the SOCKS5 proxy\n")
-	fmt.Fprintf(os.Stderr, "  test     Test the configured strategies\n")
+	fmt.Fprintf(os.Stderr, "  proxy          Run the SOCKS5 proxy\n")
+	fmt.Fprintf(os.Stderr, "  test           Test the configured strategies\n")
+	fmt.Fprintf(os.Stderr, "  encrypt-config Encrypt a configuration file\n")
 }
 
 func main() {
@@ -46,7 +49,7 @@ func main() {
 	// The remaining arguments are the subcommand and its own flags.
 	args := globalFlags.Args()
 	if len(args) == 0 {
-		logging.GetLogger().Error("expected 'proxy' or 'test' subcommands")
+		logging.GetLogger().Error("expected 'proxy', 'test', or 'encrypt-config' subcommands")
 		printUsage(globalFlags)
 		os.Exit(1)
 	}
@@ -83,6 +86,26 @@ func main() {
 		}
 		runTest(*configFile)
 
+	case "encrypt-config":
+		encryptCmd := flag.NewFlagSet("encrypt-config", flag.ExitOnError)
+		encryptCmd.Usage = func() {
+			_, _ = fmt.Fprintf(encryptCmd.Output(), "Usage: gocircum-cli encrypt-config [input_file] [output_file]\n\n")
+			_, _ = fmt.Fprintf(encryptCmd.Output(), "Encrypts a configuration file using a password.\n\nOptions:\n")
+			encryptCmd.PrintDefaults()
+		}
+		if err := encryptCmd.Parse(commandArgs); err != nil {
+			os.Exit(1)
+		}
+
+		encryptArgs := encryptCmd.Args()
+		if len(encryptArgs) != 2 {
+			logging.GetLogger().Error("Expected input and output file paths")
+			encryptCmd.Usage()
+			os.Exit(1)
+		}
+
+		runEncryptConfig(encryptArgs[0], encryptArgs[1])
+
 	default:
 		logging.GetLogger().Error("unknown command", "command", command)
 		printUsage(globalFlags)
@@ -93,10 +116,35 @@ func main() {
 func runProxy(addr, strategyID, configFile string) {
 	logger := logging.GetLogger().With("component", "proxy-runner")
 
-	cfg, err := config.LoadFileConfig(configFile)
-	if err != nil {
-		logger.Error("Failed to load config", "error", err)
-		os.Exit(1)
+	// Check if this is an encrypted config file
+	isEncrypted := strings.HasSuffix(configFile, ".enc.yaml")
+
+	var cfg *config.FileConfig
+	var err error
+
+	if isEncrypted {
+		// Prompt for password
+		fmt.Print("Enter config password: ")
+		password, err := term.ReadPassword(int(syscall.Stdin))
+		if err != nil {
+			logger.Error("Failed to read password", "error", err)
+			os.Exit(1)
+		}
+		fmt.Println()
+
+		// Load encrypted config
+		cfg, err = config.LoadSecureConfig(configFile, password)
+		if err != nil {
+			logger.Error("Failed to load encrypted config", "error", err)
+			os.Exit(1)
+		}
+	} else {
+		// Load plaintext config
+		cfg, err = config.LoadFileConfig(configFile)
+		if err != nil {
+			logger.Error("Failed to load config", "error", err)
+			os.Exit(1)
+		}
 	}
 
 	// Determine listen address
@@ -154,10 +202,36 @@ func runProxy(addr, strategyID, configFile string) {
 
 func runTest(configFile string) {
 	logger := logging.GetLogger().With("component", "test-runner")
-	cfg, err := config.LoadFileConfig(configFile)
-	if err != nil {
-		logger.Error("Failed to load config", "error", err)
-		os.Exit(1)
+
+	// Check if this is an encrypted config file
+	isEncrypted := strings.HasSuffix(configFile, ".enc.yaml")
+
+	var cfg *config.FileConfig
+	var err error
+
+	if isEncrypted {
+		// Prompt for password
+		fmt.Print("Enter config password: ")
+		password, err := term.ReadPassword(int(syscall.Stdin))
+		if err != nil {
+			logger.Error("Failed to read password", "error", err)
+			os.Exit(1)
+		}
+		fmt.Println()
+
+		// Load encrypted config
+		cfg, err = config.LoadSecureConfig(configFile, password)
+		if err != nil {
+			logger.Error("Failed to load encrypted config", "error", err)
+			os.Exit(1)
+		}
+	} else {
+		// Load plaintext config
+		cfg, err = config.LoadFileConfig(configFile)
+		if err != nil {
+			logger.Error("Failed to load config", "error", err)
+			os.Exit(1)
+		}
 	}
 
 	engine, err := core.NewEngine(cfg, logger)
@@ -182,4 +256,69 @@ func runTest(configFile string) {
 		_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", res.Fingerprint.ID, status, res.Latency, res.Fingerprint.Description)
 	}
 	_ = w.Flush()
+}
+
+func runEncryptConfig(inputFile, outputFile string) {
+	logger := logging.GetLogger().With("component", "encrypt-config")
+
+	// Check if input file exists
+	if _, err := os.Stat(inputFile); os.IsNotExist(err) {
+		logger.Error("Input file does not exist", "file", inputFile)
+		os.Exit(1)
+	}
+
+	// Check if output file already exists
+	if _, err := os.Stat(outputFile); err == nil {
+		fmt.Printf("Warning: Output file '%s' already exists. Overwrite? (y/n): ", outputFile)
+		var answer string
+		if _, err := fmt.Scanln(&answer); err != nil {
+			fmt.Println("Error reading input:", err)
+			return
+		}
+		if answer != "y" && answer != "Y" {
+			logger.Info("Operation cancelled by user")
+			os.Exit(0)
+		}
+	}
+
+	// Prompt for password
+	fmt.Print("Enter password: ")
+	password, err := term.ReadPassword(int(syscall.Stdin))
+	if err != nil {
+		logger.Error("Failed to read password", "error", err)
+		os.Exit(1)
+	}
+	fmt.Println()
+
+	// Confirm password
+	fmt.Print("Confirm password: ")
+	confirmPassword, err := term.ReadPassword(int(syscall.Stdin))
+	if err != nil {
+		logger.Error("Failed to read password confirmation", "error", err)
+		os.Exit(1)
+	}
+	fmt.Println()
+
+	// Check if passwords match
+	if string(password) != string(confirmPassword) {
+		logger.Error("Passwords do not match")
+		os.Exit(1)
+	}
+
+	// Load the input configuration
+	cfg, err := config.LoadFileConfig(inputFile)
+	if err != nil {
+		logger.Error("Failed to load configuration", "error", err)
+		os.Exit(1)
+	}
+
+	// Encrypt the configuration
+	err = config.EncryptConfig(cfg, password, outputFile)
+	if err != nil {
+		logger.Error("Failed to encrypt configuration", "error", err)
+		os.Exit(1)
+	}
+
+	logger.Info("Configuration encrypted and saved", "output", outputFile)
+	fmt.Println("IMPORTANT: Store this password securely. If lost, the configuration cannot be recovered.")
 }

@@ -232,11 +232,14 @@ func TestCreateClientForProvider_BootstrapFailover(t *testing.T) {
 
 func TestGenerateDGAProviders(t *testing.T) {
 	dgaCfg := &config.DGAConfig{
-		Algorithm:            "argon2id_sha3_based",
-		EntropySources:       []string{"system_random", "network_timing"},
-		SeedRotationInterval: "2h",
-		DomainCount:          5,
-		ValidationThreshold:  3,
+		Algorithm:    "argon2id_sha3_based",
+		Enabled:      true,
+		RotationTime: 120, // 2 hours in minutes
+		DomainCount:  5,
+		Parameters: map[string]string{
+			"entropy_sources":      "system_random,network_timing",
+			"validation_threshold": "3",
+		},
 	}
 	providers := []config.DoHProvider{
 		{

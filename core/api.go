@@ -1,5 +1,7 @@
 package core
 
+//nolint:unused
+
 import (
 	"bufio"
 	"context"
@@ -28,19 +30,23 @@ import (
 
 // Engine is the main controller for the circumvention library.
 type Engine struct {
-	mu                    sync.Mutex
-	logger                logging.Logger
-	ranker                *ranker.Ranker
-	activeProxy           *proxy.Proxy
-	proxyErrorChan        chan error
-	lastProxyError        error
-	fileConfig            *config.FileConfig
-	cancelProxy           context.CancelFunc
-	dialerFactory         *engine.DefaultDialerFactory
+	mu             sync.Mutex
+	logger         logging.Logger
+	ranker         *ranker.Ranker
+	activeProxy    *proxy.Proxy
+	proxyErrorChan chan error
+	lastProxyError error
+	fileConfig     *config.FileConfig
+	cancelProxy    context.CancelFunc
+	dialerFactory  *engine.DefaultDialerFactory
+	//nolint:unused
 	originalResolver      *net.Resolver
 	dnsInterceptor        *DNSInterceptor
 	secureConnectionStore map[string]*SecureConnectionDetails
 	cleanupRunning        bool
+	// Retained for future implementation of domain generation features
+	//nolint:unused
+	dga *DomainGenerationAlgorithm
 }
 
 // NewEngine creates a new core engine with a given set of fingerprints.

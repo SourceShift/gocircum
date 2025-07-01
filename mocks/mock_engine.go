@@ -73,11 +73,12 @@ func (mr *MockEngineMockRecorder) GetStrategyByID(id any) *gomock.Call {
 }
 
 // Start mocks base method.
-func (m *MockEngine) Start(addr string) error {
+func (m *MockEngine) Start(addr string) (string, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "Start", addr)
-	ret0, _ := ret[0].(error)
-	return ret0
+	ret0, _ := ret[0].(string)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
 }
 
 // Start indicates an expected call of Start.
@@ -87,11 +88,12 @@ func (mr *MockEngineMockRecorder) Start(addr any) *gomock.Call {
 }
 
 // StartProxyWithStrategy mocks base method.
-func (m *MockEngine) StartProxyWithStrategy(ctx context.Context, addr string, fp *config.Fingerprint) error {
+func (m *MockEngine) StartProxyWithStrategy(ctx context.Context, addr string, fp *config.Fingerprint) (string, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "StartProxyWithStrategy", ctx, addr, fp)
-	ret0, _ := ret[0].(error)
-	return ret0
+	ret0, _ := ret[0].(string)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
 }
 
 // StartProxyWithStrategy indicates an expected call of StartProxyWithStrategy.

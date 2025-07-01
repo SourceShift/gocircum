@@ -11,18 +11,19 @@ import (
 
 // Transport interface extended for censorship resistance
 type Transport interface {
-	// DialContext connects to the given address.
-	DialContext(ctx context.Context, network, address string) (net.Conn, error)
+	// DialContext connects to the given pre-resolved IP address and port.
+	// It MUST NOT perform DNS resolution.
+	DialContext(ctx context.Context, network string, ip net.IP, port int) (net.Conn, error)
 	// Listen creates a listener on the specified network address.
 	Listen(ctx context.Context, network, address string) (net.Listener, error)
 	// Close closes the transport, releasing any resources.
 	Close() error
-	
+
 	// Hardened: Additional methods for censorship resistance
 	// GetFingerprint returns the network-observable characteristics of this transport
 	GetFingerprint() TransportFingerprint
 	// GenerateDecoyTraffic creates realistic background traffic to mask real connections
-	GenerateDecoyTraffic(ctx context.Context, targetAddr string) error
+	GenerateDecoyTraffic(ctx context.Context, targetIP net.IP, targetPort int) error
 	// SupportsObfuscation indicates if the transport can masquerade as other protocols
 	SupportsObfuscation() bool
 	// SetObfuscationTarget configures the transport to mimic a specific protocol
@@ -39,6 +40,7 @@ type TransportFingerprint struct {
 }
 
 type ObfuscationLevel int
+
 const (
 	ObfuscationNone ObfuscationLevel = iota
 	ObfuscationBasic
@@ -47,6 +49,7 @@ const (
 )
 
 type ObfuscationTarget int
+
 const (
 	ObfuscateAsHTTP ObfuscationTarget = iota
 	ObfuscateAsSSH

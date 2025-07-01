@@ -35,8 +35,7 @@ fingerprints:
     description: "Domain Fronting via Google with uTLS (Randomized)"
     domain_fronting:
       enabled: true
-      front_domain: "www.google.com:443"
-      covert_target: "www.youtube.com"
+      discovery_method: "dga"
     transport:
       protocol: "tcp"
     tls:
@@ -49,8 +48,7 @@ fingerprints:
     description: "Domain Fronting via Google with uTLS Chrome"
     domain_fronting:
       enabled: true
-      front_domain: "www.google.com:443"
-      covert_target: "www.youtube.com"
+      discovery_method: "dga"
     transport:
       protocol: "tcp"
     tls:
@@ -64,8 +62,7 @@ fingerprints:
     description: "Domain Fronting (Google) with fragmentation and uTLS Firefox"
     domain_fronting:
       enabled: true
-      front_domain: "www.google.com:443"
-      covert_target: "www.youtube.com"
+      discovery_method: "covert_cdn"
     transport:
       protocol: "tcp"
       fragmentation:
@@ -84,8 +81,7 @@ fingerprints:
     description: "Domain Fronting (Google) with even fragmentation and uTLS Safari"
     domain_fronting:
       enabled: true
-      front_domain: "www.google.com:443"
-      covert_target: "www.youtube.com"
+      discovery_method: "social_steganography"
     transport:
       protocol: "tcp"
       fragmentation:
@@ -103,8 +99,7 @@ fingerprints:
     description: "Domain Fronting via Amazon with uTLS Chrome"
     domain_fronting:
       enabled: true
-      front_domain: "a0.awsstatic.com"
-      covert_target: "www.amazon.com"
+      discovery_method: "blockchain_consensus"
     transport:
       protocol: "tcp"
     tls:

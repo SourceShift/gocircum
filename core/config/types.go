@@ -44,9 +44,11 @@ type Proxy struct {
 
 // DomainFronting configures domain fronting behavior.
 type DomainFronting struct {
-	FrontDomain  string `yaml:"front_domain"`
-	CovertTarget string `yaml:"covert_target"`
-	Enabled      bool   `yaml:"enabled"`
+	Enabled         bool   `yaml:"enabled"`
+	DiscoveryMethod string `yaml:"discovery_method"` // e.g., "dga", "covert_cdn", "social_steganography"
+	// Runtime-only fields - not serialized to YAML
+	FrontDomain  string `yaml:"-"` // Domain used for fronting
+	CovertTarget string `yaml:"-"` // Actual target domain
 }
 
 // Fingerprint defines a complete connection profile.
@@ -69,12 +71,22 @@ func (f *Fingerprint) Validate() error {
 		return fmt.Errorf("security policy violation: domain_fronting must be enabled for all strategies")
 	}
 
-	// If domain fronting is enabled, its properties must be valid.
-	if f.DomainFronting.FrontDomain == "" {
-		return fmt.Errorf("front_domain must be set when domain_fronting is enabled")
+	// If domain fronting is enabled, ensure a discovery method is specified
+	if f.DomainFronting.DiscoveryMethod == "" {
+		return fmt.Errorf("discovery_method must be set when domain_fronting is enabled")
 	}
-	if f.DomainFronting.CovertTarget == "" {
-		return fmt.Errorf("covert_target must be set when domain_fronting is enabled")
+
+	// Validate the discovery method
+	validMethods := map[string]bool{
+		"dga":                  true,
+		"covert_cdn":           true,
+		"social_steganography": true,
+		"blockchain_consensus": true,
+		"peer_gossip":          true,
+	}
+
+	if !validMethods[f.DomainFronting.DiscoveryMethod] {
+		return fmt.Errorf("invalid discovery_method: %s", f.DomainFronting.DiscoveryMethod)
 	}
 
 	// Add more validation for Transport and TLS fields
@@ -91,8 +103,12 @@ type Transport struct {
 	Fragmentation *Fragmentation `yaml:"fragmentation,omitempty"`
 }
 
-// Fragmentation configures ClientHello fragmentation.
+// Fragmentation configuration for transport layer.
 type Fragmentation struct {
+	Enabled     bool     `yaml:"enabled"`
+	Strategy    string   `yaml:"strategy"`
+	NumPackets  int      `yaml:"num_packets,omitempty"`
+	Delay       int      `yaml:"delay,omitempty"`
 	PacketSizes [][2]int `yaml:"packet_sizes"`
 	DelayMs     [2]int   `yaml:"delay_ms"`
 	Algorithm   string   `yaml:"algorithm,omitempty"`
@@ -105,16 +121,17 @@ type TLS struct {
 	UserAgent     string         `yaml:"user_agent,omitempty"`
 	ServerName    string         `yaml:"server_name,omitempty"`
 	RootCAs       *x509.CertPool `yaml:"-"` // This will not be marshalled from/to YAML.
-	// NOTE: InsecureSkipVerify is intentionally omitted. It must never be configurable.
-	MinVersion      string        `yaml:"min_version,omitempty"` // e.g., "1.2"
-	MaxVersion      string        `yaml:"max_version,omitempty"` // e.g., "1.3"
-	CipherSuites    []string      `yaml:"cipher_suites,omitempty"`
-	ALPN            []string      `yaml:"alpn,omitempty"`
-	ECHEnabled      bool          `yaml:"ech_enabled,omitempty"`
-	ECHConfig       string        `yaml:"ech_config,omitempty"`
-	UTLSParrot      string        `yaml:"utls_parrot,omitempty"`
-	QUICNextProtos  []string      `yaml:"quic_next_protos,omitempty"`
-	QUICIdleTimeout time.Duration `yaml:"quic_idle_timeout,omitempty"`
+	// InsecureSkipVerify should be false in production. Only use for testing.
+	InsecureSkipVerify bool          `yaml:"insecure_skip_verify,omitempty"`
+	MinVersion         string        `yaml:"min_version,omitempty"` // e.g., "1.2"
+	MaxVersion         string        `yaml:"max_version,omitempty"` // e.g., "1.3"
+	CipherSuites       []string      `yaml:"cipher_suites,omitempty"`
+	ALPN               []string      `yaml:"alpn,omitempty"`
+	ECHEnabled         bool          `yaml:"ech_enabled,omitempty"`
+	ECHConfig          string        `yaml:"ech_config,omitempty"`
+	UTLSParrot         string        `yaml:"utls_parrot,omitempty"`
+	QUICNextProtos     []string      `yaml:"quic_next_protos,omitempty"`
+	QUICIdleTimeout    time.Duration `yaml:"quic_idle_timeout,omitempty"`
 }
 
 // Validate enforces security policies on the TLS configuration.
@@ -177,13 +194,14 @@ type BootstrapDiscovery struct {
 	PeerDiscoveryEnabled bool     `yaml:"peer_discovery_enabled"`
 }
 
-// DGAConfig holds configuration for the Domain Generation Algorithm
+// DGAConfig holds configuration for the domain generation algorithm
 type DGAConfig struct {
-	Algorithm            string   `yaml:"algorithm"`
-	EntropySources       []string `yaml:"entropy_sources"`
-	SeedRotationInterval string   `yaml:"seed_rotation_interval"`
-	DomainCount          int      `yaml:"domain_count"`
-	ValidationThreshold  int      `yaml:"validation_threshold"`
+	Enabled      bool              `yaml:"enabled"`
+	Algorithm    string            `yaml:"algorithm"`     // e.g., "mathematical", "dictionary", "hybrid"
+	Seed         string            `yaml:"seed"`          // Base seed for the algorithm
+	RotationTime int               `yaml:"rotation_time"` // Rotation time in minutes
+	Parameters   map[string]string `yaml:"parameters"`    // Algorithm-specific parameters
+	DomainCount  int               `yaml:"domain_count"`  // Number of domains to generate
 }
 
 // SteganographicChannel holds config for steganographic discovery
@@ -225,6 +243,7 @@ func (f *Fingerprint) SecureDestroy() {
 
 // SecureDestroy securely clears DomainFronting data
 func (df *DomainFronting) SecureDestroy() {
+	df.DiscoveryMethod = strings.Repeat("\x00", len(df.DiscoveryMethod))
 	df.FrontDomain = strings.Repeat("\x00", len(df.FrontDomain))
 	df.CovertTarget = strings.Repeat("\x00", len(df.CovertTarget))
 }

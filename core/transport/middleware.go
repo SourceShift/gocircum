@@ -27,9 +27,9 @@ type loggingTransport struct {
 }
 
 // DialContext logs the dial call and then calls the underlying transport's DialContext.
-func (t *loggingTransport) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
-	t.logger.Printf("Dialing %s://%s", network, address)
-	conn, err := t.Transport.DialContext(ctx, network, address)
+func (t *loggingTransport) DialContext(ctx context.Context, network string, ip net.IP, port int) (net.Conn, error) {
+	t.logger.Printf("Dialing %s://%s:%d", network, ip, port)
+	conn, err := t.Transport.DialContext(ctx, network, ip, port)
 	if err != nil {
 		t.logger.Printf("Dial failed: %v", err)
 	} else {
@@ -73,13 +73,13 @@ type timeoutTransport struct {
 }
 
 // DialContext applies a timeout to the dial operation.
-func (t *timeoutTransport) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
+func (t *timeoutTransport) DialContext(ctx context.Context, network string, ip net.IP, port int) (net.Conn, error) {
 	if t.timeout > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, t.timeout)
 		defer cancel()
 	}
-	return t.Transport.DialContext(ctx, network, address)
+	return t.Transport.DialContext(ctx, network, ip, port)
 }
 
 // TimeoutMiddleware creates a middleware that applies a timeout to dial operations.
@@ -100,10 +100,10 @@ type retryTransport struct {
 }
 
 // DialContext retries dialing on failure up to the configured number of attempts.
-func (t *retryTransport) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
+func (t *retryTransport) DialContext(ctx context.Context, network string, ip net.IP, port int) (net.Conn, error) {
 	var lastErr error
 	for i := 0; i < t.attempts; i++ {
-		conn, err := t.Transport.DialContext(ctx, network, address)
+		conn, err := t.Transport.DialContext(ctx, network, ip, port)
 		if err == nil {
 			return conn, nil
 		}
@@ -137,11 +137,11 @@ type throttlingTransport struct {
 }
 
 // DialContext waits for a token from the rate limiter before dialing.
-func (t *throttlingTransport) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
+func (t *throttlingTransport) DialContext(ctx context.Context, network string, ip net.IP, port int) (net.Conn, error) {
 	if err := t.limiter.Wait(ctx); err != nil {
 		return nil, err
 	}
-	return t.Transport.DialContext(ctx, network, address)
+	return t.Transport.DialContext(ctx, network, ip, port)
 }
 
 // ThrottlingMiddleware creates a middleware for rate limiting dial attempts.

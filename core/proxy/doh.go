@@ -289,7 +289,9 @@ func (r *DoHResolver) rotateKeyMaterial(currentKey []byte, iteration int) []byte
 
 	// Add additional entropy
 	extraEntropy := make([]byte, 16)
-	rand.Read(extraEntropy)
+	if _, err := rand.Read(extraEntropy); err != nil {
+		logging.GetLogger().Warn("Failed to generate random extra entropy", "error", err)
+	}
 	h.Write(extraEntropy)
 
 	// Return the new key
@@ -945,7 +947,9 @@ func (r *DoHResolver) gatherNetworkEntropy() []byte {
 		end := time.Now().UnixNano()
 
 		if err == nil {
-			conn.Close()
+			if closeErr := conn.Close(); closeErr != nil {
+				logging.GetLogger().Debug("Error closing connection during entropy gathering", "error", closeErr)
+			}
 		}
 
 		// Nanosecond connection timing has good entropy
@@ -1491,41 +1495,44 @@ func isTestEnvironment() bool {
 
 // dialTLSWithUTLS creates a TLS connection using uTLS to resist fingerprinting.
 func dialTLSWithUTLS(ctx context.Context, network, addr string, cfg *utls.Config, provider config.DoHProvider) (net.Conn, error) {
-	// Check if we're in a test environment
-	if isTestEnvironment() {
-		// For tests, use a simpler connection method
-		dialer := &net.Dialer{
-			Timeout:   10 * time.Second,
-			KeepAlive: 10 * time.Second,
-		}
+	// CRITICAL: No test environment exemptions for DNS security
+	// All environments must use secure DNS resolution
 
-		// In tests, we can use the standard TLS library
-		conn, err := dialer.DialContext(ctx, network, addr)
-		if err != nil {
-			return nil, err
-		}
-
-		// Convert the utls.Config to a standard tls.Config
-		tlsConfig := &tls.Config{
-			ServerName:         cfg.ServerName,
-			InsecureSkipVerify: cfg.InsecureSkipVerify,
-			RootCAs:            cfg.RootCAs,
-		}
-
-		// Create a TLS client connection
-		tlsConn := tls.Client(conn, tlsConfig)
-		if err := tlsConn.HandshakeContext(ctx); err != nil {
-			if closeErr := conn.Close(); closeErr != nil {
-				logging.GetLogger().Warn("Error closing connection after handshake failure", "error", closeErr)
-			}
-			return nil, err
-		}
-
-		return tlsConn, nil
+	// Validate that we're connecting to a pre-resolved IP address only
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return nil, fmt.Errorf("invalid address format: %w", err)
 	}
 
-	// TODO: Implement real uTLS-based TLS dialing with anti-fingerprinting and domain fronting support
-	return nil, fmt.Errorf("dialTLSWithUTLS not implemented for production use")
+	if net.ParseIP(host) == nil {
+		return nil, fmt.Errorf("SECURITY_VIOLATION: hostname passed to TLS dialer, must use pre-resolved IP")
+	}
+
+	// For production, use a secure dialer with custom TLS client
+	dialer := &net.Dialer{
+		Timeout:   10 * time.Second,
+		KeepAlive: 10 * time.Second,
+	}
+
+	// Connect to the pre-resolved IP address
+	conn, err := dialer.DialContext(ctx, network, addr)
+	if err != nil {
+		return nil, err
+	}
+
+	// Create a TLS client connection with uTLS for fingerprint resistance
+	tlsConn := utls.UClient(conn, cfg, utls.HelloChrome_Auto)
+
+	// Perform TLS handshake with context awareness
+	if err := tlsConn.HandshakeContext(ctx); err != nil {
+		if closeErr := conn.Close(); closeErr != nil {
+			// Log error but continue since this is just a validation check
+			logging.GetLogger().Debug("Error closing connection during TLS validation", "error", closeErr)
+		}
+		return nil, err
+	}
+
+	return tlsConn, nil
 }
 
 // Wrapper methods for parallel discovery with context signatures
@@ -1603,7 +1610,7 @@ func (r *DoHResolver) validateTLSConnectivity(provider config.DoHProvider) bool 
 	defer func() {
 		if closeErr := conn.Close(); closeErr != nil {
 			// Log error but continue since this is just a validation check
-			r.logger.Debug("Error closing connection during TLS validation", "error", closeErr)
+			logging.GetLogger().Debug("Error closing connection during TLS validation", "error", closeErr)
 		}
 	}()
 

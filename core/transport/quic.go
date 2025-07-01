@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math/big"
 	"net"
+	"strconv"
 	"time"
 
 	quic "github.com/refraction-networking/uquic"
@@ -21,11 +22,11 @@ type QUICConfig struct {
 
 // QUICTransport implements the Transport interface for QUIC connections.
 type QUICTransport struct {
-	tlsConfig         *utls.Config
-	quicConfig        *quic.Config
-	obfuscationTarget ObfuscationTarget
+	tlsConfig          *utls.Config
+	quicConfig         *quic.Config
+	obfuscationTarget  ObfuscationTarget
 	obfuscationEnabled bool
-	decoyTrafficRate  time.Duration
+	decoyTrafficRate   time.Duration
 }
 
 // NewQUICTransport creates a new QUICTransport with the given configuration.
@@ -40,7 +41,11 @@ func NewQUICTransport(cfg *QUICConfig) (*QUICTransport, error) {
 }
 
 // DialContext connects to the given address using QUIC.
-func (t *QUICTransport) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
+func (t *QUICTransport) DialContext(ctx context.Context, network string, ip net.IP, port int) (net.Conn, error) {
+	if ip == nil {
+		return nil, errors.New("ip address cannot be nil")
+	}
+	address := net.JoinHostPort(ip.String(), fmt.Sprintf("%d", port))
 	conn, err := quic.DialAddr(ctx, address, t.tlsConfig, t.quicConfig)
 	if err != nil {
 		return nil, fmt.Errorf("quic dial failed: %w", err)
@@ -164,10 +169,15 @@ func (t *QUICTransport) GetFingerprint() TransportFingerprint {
 }
 
 // GenerateDecoyTraffic creates realistic background traffic to mask real connections
-func (t *QUICTransport) GenerateDecoyTraffic(ctx context.Context, targetAddr string) error {
+func (t *QUICTransport) GenerateDecoyTraffic(ctx context.Context, targetIP net.IP, targetPort int) error {
 	if !t.obfuscationEnabled || t.decoyTrafficRate == 0 {
 		return nil // Decoy traffic disabled
 	}
+
+	if targetIP == nil {
+		return errors.New("targetIP cannot be nil for decoy traffic")
+	}
+	targetAddr := net.JoinHostPort(targetIP.String(), fmt.Sprintf("%d", targetPort))
 
 	go func() {
 		ticker := time.NewTicker(t.decoyTrafficRate)
@@ -179,7 +189,7 @@ func (t *QUICTransport) GenerateDecoyTraffic(ctx context.Context, targetAddr str
 				return
 			case <-ticker.C:
 				// Generate a small decoy connection
-				if err := t.generateSingleDecoyConnection(targetAddr); err != nil {
+				if err := t.generateSingleDecoyConnection(ctx, "udp", targetAddr); err != nil {
 					// Log error but don't stop decoy traffic generation
 					continue
 				}
@@ -208,7 +218,7 @@ func (t *QUICTransport) getObfuscationLevel() ObfuscationLevel {
 	if !t.obfuscationEnabled {
 		return ObfuscationNone
 	}
-	
+
 	switch t.obfuscationTarget {
 	case ObfuscateAsHTTP, ObfuscateAsSSH:
 		return ObfuscationBasic
@@ -221,11 +231,27 @@ func (t *QUICTransport) getObfuscationLevel() ObfuscationLevel {
 	}
 }
 
-func (t *QUICTransport) generateSingleDecoyConnection(targetAddr string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+func (t *QUICTransport) generateSingleDecoyConnection(ctx context.Context, network, targetAddr string) error {
+	dialCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
-	conn, err := t.DialContext(ctx, "udp", targetAddr)
+	ipStr, portStr, err := net.SplitHostPort(targetAddr)
+	if err != nil {
+		return fmt.Errorf("invalid target address for decoy connection: %w", err)
+	}
+	ip := net.ParseIP(ipStr)
+	if ip == nil {
+		return fmt.Errorf("invalid IP in target address for decoy connection: %s", ipStr)
+	}
+	port, err := net.LookupPort("udp", portStr)
+	if err != nil {
+		port, err = strconv.Atoi(portStr)
+		if err != nil {
+			return fmt.Errorf("invalid port in target address for decoy connection: %w", err)
+		}
+	}
+
+	conn, err := t.DialContext(dialCtx, network, ip, port)
 	if err != nil {
 		return err
 	}
@@ -235,7 +261,7 @@ func (t *QUICTransport) generateSingleDecoyConnection(targetAddr string) error {
 	data := t.generateDecoyData()
 	if len(data) > 0 {
 		_, _ = conn.Write(data)
-		
+
 		// Wait for a realistic amount of time
 		delay := t.generateRealisticDelay()
 		time.Sleep(delay)
