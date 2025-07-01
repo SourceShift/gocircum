@@ -730,46 +730,6 @@ func (r *DoHResolver) discoverP2PProviders(ctx context.Context) ([]config.DoHPro
 	return providers, nil
 }
 
-// validateProviderHealth checks the health of discovered providers
-//
-//nolint:unused // Will be used when implementing provider health validation
-func (r *DoHResolver) validateProviderHealth(ctx context.Context, providers []config.DoHProvider) []config.DoHProvider {
-	logger := logging.GetLogger()
-	var validProviders []config.DoHProvider
-
-	// Skip validation in test environments to speed up tests
-	if isTestEnvironment() {
-		logger.Debug("Skipping provider health validation in test environment")
-		return providers
-	}
-
-	logger.Debug("Validating health of discovered providers", "count", len(providers))
-
-	// In a real implementation, we would check each provider with a test query
-	// For now, simulate validation by accepting most providers
-	for _, provider := range providers {
-		// Simulate some providers failing validation (about 10%)
-		randBytes := make([]byte, 1)
-		_, err := rand.Read(randBytes)
-		if err == nil && randBytes[0] > 230 { // ~10% failure rate
-			logger.Debug("Provider failed health check (simulated)", "provider", provider.Name)
-			continue
-		}
-
-		// Add provider to valid list
-		validProviders = append(validProviders, provider)
-	}
-
-	// Log validation results with differential privacy
-	noisyCount := addDifferentialPrivacyNoise(len(validProviders))
-	logger.Info("Provider health validation completed",
-		"input_count_category", categorizeDiscoveryResult(len(providers)),
-		"valid_count_category", categorizeDiscoveryResult(len(validProviders)),
-		"noisy_valid_count", noisyCount)
-
-	return validProviders
-}
-
 // secureShuffleProviders shuffles providers using a cryptographically secure algorithm
 func (r *DoHResolver) secureShuffleProviders(providers []config.DoHProvider) []config.DoHProvider {
 	if len(providers) <= 1 {
@@ -1070,86 +1030,6 @@ func abs(x int) int {
 		return -x
 	}
 	return x
-}
-
-// generateDecoyQueries generates decoy DoH queries to mask usage patterns
-//
-//nolint:unused // Will be used for traffic pattern obfuscation
-func (r *DoHResolver) generateDecoyQueries(ctx context.Context, providers []config.DoHProvider) {
-	logger := logging.GetLogger()
-
-	// Skip decoy generation in test environments
-	if isTestEnvironment() {
-		logger.Debug("Skipping decoy query generation in test environment")
-		return
-	}
-
-	// Determine if we should generate decoys based on configuration
-	shouldGenerateDecoys := true // In a real implementation, check configuration
-	if !shouldGenerateDecoys {
-		return
-	}
-
-	// Run in a separate goroutine to avoid blocking
-	go func() {
-		// Create a new context with cancellation for the decoy operation
-		decoyCtx, cancel := context.WithCancel(context.Background())
-		defer cancel()
-
-		logger.Debug("Starting decoy query generation")
-
-		// Generate realistic-looking domain patterns for decoys
-		decoyDomains := []string{
-			"www.popular-site-%d.com",
-			"api.service-%d.net",
-			"cdn.content-%d.org",
-			"mail.provider-%d.com",
-			"login.app-%d.io",
-		}
-
-		// Generate a few decoy queries with random timing
-		numDecoys := 3 + (time.Now().UnixNano() % 5) // 3-7 decoys
-		for i := 0; i < int(numDecoys) && ctx.Err() == nil; i++ {
-			// Select a random provider
-			if len(providers) == 0 {
-				break
-			}
-
-			providerIndex, err := generateSecureIntFromEntropy(gatherTimingEntropy(), int64(len(providers)))
-			if err != nil {
-				providerIndex = int(time.Now().UnixNano() % int64(len(providers)))
-			}
-			provider := providers[providerIndex]
-
-			// In a real implementation, we would use the provider to make actual DoH queries
-			_ = provider // Prevent unused variable error
-
-			// Select a random domain pattern
-			domainIndex, _ := generateSecureIntFromEntropy(gatherTimingEntropy(), int64(len(decoyDomains)))
-			domainPattern := decoyDomains[domainIndex]
-
-			// Generate a random number for the domain
-			randNum, _ := generateSecureIntFromEntropy(gatherTimingEntropy(), 10000)
-			decoyDomain := fmt.Sprintf(domainPattern, randNum)
-
-			// Log with low level to avoid cluttering logs
-			logger.Debug("Generating decoy query", "domain", decoyDomain)
-
-			// In a real implementation, we would actually make the query
-			// For now, just simulate the query with a delay
-
-			// Add jitter to make timing analysis harder
-			jitterMs, _ := generateSecureIntFromEntropy(gatherTimingEntropy(), 2000)
-			select {
-			case <-decoyCtx.Done():
-				return
-			case <-time.After(time.Duration(500+jitterMs) * time.Millisecond):
-				// Continue with next decoy
-			}
-		}
-
-		logger.Debug("Completed decoy query generation")
-	}()
 }
 
 var createClientForProvider = func(provider config.DoHProvider) (*http.Client, error) {

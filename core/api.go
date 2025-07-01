@@ -477,28 +477,6 @@ func (e *Engine) validateDoHConnectivity() error {
 	return nil
 }
 
-// generateRealisticBrowserHeaders creates headers typical of real browsers
-//
-//nolint:unused // Will be used in future implementation
-func generateRealisticBrowserHeaders() map[string]string {
-	headers := make(map[string]string)
-
-	// Essential headers that real browsers always send
-	headers["Accept"] = "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8"
-	headers["Accept-Language"] = generateRealisticAcceptLanguage()
-	headers["Accept-Encoding"] = "gzip, deflate, br"
-	headers["Connection"] = "keep-alive"
-	headers["Upgrade-Insecure-Requests"] = "1"
-
-	// Add realistic Sec-Fetch headers
-	headers["Sec-Fetch-Dest"] = "document"
-	headers["Sec-Fetch-Mode"] = "navigate"
-	headers["Sec-Fetch-Site"] = "none"
-	headers["Sec-Fetch-User"] = "?1"
-
-	return headers
-}
-
 // generateRealisticAcceptLanguage creates realistic Accept-Language headers
 func generateRealisticAcceptLanguage() string {
 	languages := []string{
@@ -511,56 +489,6 @@ func generateRealisticAcceptLanguage() string {
 
 	idx, _ := engine.CryptoRandInt(0, len(languages)-1)
 	return languages[idx]
-}
-
-// generateBrowserSpecificHeaders creates headers specific to the User-Agent
-//
-//nolint:unused // Planned for future browser fingerprinting functionality
-func generateBrowserSpecificHeaders(userAgent string) map[string]string {
-	headers := make(map[string]string)
-
-	if strings.Contains(userAgent, "Chrome") {
-		headers["Sec-Ch-Ua"] = "\"Google Chrome\";v=\"124\", \"Chromium\";v=\"124\", \"Not-A.Brand\";v=\"99\""
-		headers["Sec-Ch-Ua-Mobile"] = "?0"
-		headers["Sec-Ch-Ua-Platform"] = "\"Windows\""
-	} else if strings.Contains(userAgent, "Firefox") {
-		headers["DNT"] = "1"
-		// Firefox doesn't send Sec-Ch-Ua headers
-	} else if strings.Contains(userAgent, "Safari") && !strings.Contains(userAgent, "Chrome") {
-		// Safari-specific headers
-		headers["Accept"] = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
-	}
-
-	return headers
-}
-
-// generateRealisticPaddingHeader creates realistic-looking padding headers
-//
-//nolint:unused // Will be used for traffic obfuscation features
-func generateRealisticPaddingHeader() (string, string) {
-	paddingHeaders := []struct {
-		key    string
-		values []string
-	}{
-		{
-			key:    "X-Requested-With",
-			values: []string{"XMLHttpRequest", "fetch"},
-		},
-		{
-			key:    "Cache-Control",
-			values: []string{"no-cache", "max-age=0"},
-		},
-		{
-			key:    "X-Forwarded-For",
-			values: []string{"192.168.1.1", "10.0.0.1"},
-		},
-	}
-
-	headerIdx, _ := engine.CryptoRandInt(0, len(paddingHeaders)-1)
-	header := paddingHeaders[headerIdx]
-
-	valueIdx, _ := engine.CryptoRandInt(0, len(header.values)-1)
-	return header.key, header.values[valueIdx]
 }
 
 func getRandomUserAgent() (string, error) {
@@ -1192,49 +1120,6 @@ type NetworkEvent struct {
 	SendDuration time.Duration
 	Timestamp    time.Time
 	Success      bool
-}
-
-// installSystemCallMonitoring attempts to detect the OS and log the intended syscall interception
-//
-//nolint:unused // Reserved for future security enhancements
-func (e *Engine) installSystemCallMonitoring() error {
-	osType := runtime.GOOS
-	switch osType {
-	case "linux":
-		e.logger.Info("Would install syscall monitoring on Linux")
-	case "darwin":
-		e.logger.Info("Would install syscall monitoring on macOS")
-	case "windows":
-		e.logger.Info("Would install syscall monitoring on Windows")
-	default:
-		e.logger.Info("Would install syscall monitoring on", "os", osType)
-	}
-
-	return nil
-}
-
-// installNetworkLevelDNSBlocking blocks DNS at network level
-//
-//nolint:unused // Planned for comprehensive DNS leak prevention
-func (e *Engine) installNetworkLevelDNSBlocking() error {
-	return e.installNetworkDNSBlocking()
-}
-
-// startDecoyDNSTraffic generates decoy DNS traffic
-//
-//nolint:unused // Will be implemented for traffic pattern obfuscation
-func (e *Engine) startDecoyDNSTraffic() {
-	_ = e.startDNSDecoyTraffic()
-}
-
-// triggerSecurityEmergencyShutdown initiates emergency shutdown
-//
-//nolint:unused // Critical security feature for future implementation
-func (e *Engine) triggerSecurityEmergencyShutdown(reason string) {
-	e.logger.Error("SECURITY_EMERGENCY_SHUTDOWN", "reason", reason, "timestamp", time.Now().Unix())
-	if os.Getenv("GOCIRCUM_STRICT_MODE") == "1" {
-		os.Exit(1)
-	}
 }
 
 // verifyDNSIntegrity performs comprehensive DNS system integrity checks
