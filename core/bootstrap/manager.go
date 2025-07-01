@@ -36,7 +36,7 @@ func NewManager(config BootstrapConfig, logger Logger) (*Manager, error) {
 		cache:         make(map[string]*BootstrapResult),
 		logger:        logger,
 		healthCheck:   config.HealthCheck,
-		fallbackAddrs: config.FallbackAddresses,
+		fallbackAddrs: []string{},
 		cacheTTL:      config.CacheTTL,
 	}
 

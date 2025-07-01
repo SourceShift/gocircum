@@ -41,12 +41,14 @@ func TestNewManager(t *testing.T) {
 func TestManagerRegisterProvider(t *testing.T) {
 	logger := &testLogger{}
 	config := BootstrapConfig{
-		HealthCheck:       HealthCheckOptions{},
-		FallbackAddresses: []string{"1.2.3.4:443"},
+		HealthCheck: HealthCheckOptions{},
 	}
 
 	manager, err := NewManager(config, logger)
 	require.NoError(t, err, "Failed to create Manager")
+
+	// Set fallbackAddrs directly for testing purposes
+	manager.fallbackAddrs = []string{"1.2.3.4:443"}
 
 	// Register a test provider
 	provider := &mockProvider{
@@ -126,8 +128,7 @@ providers:
 	assert.True(t, config.HealthCheck.Enabled)
 	assert.Equal(t, 2*time.Second, config.HealthCheck.Timeout)
 	assert.Equal(t, 5, config.HealthCheck.Concurrency)
-	assert.Equal(t, 2, len(config.FallbackAddresses))
-	assert.Equal(t, "1.1.1.1:443", config.FallbackAddresses[0])
+	// FallbackAddresses field has been removed for security reasons
 	assert.Equal(t, 1, len(config.Providers))
 	assert.Equal(t, "doh", config.Providers[0].Type)
 }
