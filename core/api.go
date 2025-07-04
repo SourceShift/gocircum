@@ -10,7 +10,6 @@ import (
 	"crypto/sha256"
 	"crypto/x509"
 	"fmt"
-	mathrand "math/rand"
 	"net"
 	"net/http"
 	"os"
@@ -26,6 +25,7 @@ import (
 	"github.com/gocircum/gocircum/core/proxy"
 	"github.com/gocircum/gocircum/core/ranker"
 	"github.com/gocircum/gocircum/pkg/logging"
+	"github.com/gocircum/gocircum/pkg/securerandom"
 )
 
 // Engine is the main controller for the circumvention library.
@@ -682,7 +682,13 @@ func (e *Engine) startDNSDecoyTraffic() error {
 	}
 
 	go func() {
-		ticker := time.NewTicker(time.Duration(30+mathrand.Intn(60)) * time.Second)
+		// Use secure random interval between 30 and 90 seconds
+		intervalSeconds, err := securerandom.Int(30, 90)
+		if err != nil {
+			e.logger.Error("Failed to generate secure random interval", "error", err)
+			intervalSeconds = 60 // Use safe default on error
+		}
+		ticker := time.NewTicker(time.Duration(intervalSeconds) * time.Second)
 		defer ticker.Stop()
 
 		for range ticker.C {

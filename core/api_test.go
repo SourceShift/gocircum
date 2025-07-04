@@ -96,7 +96,13 @@ func TestEngine_ProxyLifecycle(t *testing.T) {
 		CanaryDomains: []string{"example.com"},
 	}
 	engine, err := NewEngine(fileConfig, logger)
-	assert.NoError(t, err, "NewEngine should not return an error")
+	require.NoError(t, err, "NewEngine should not return an error")
+
+	// If engine creation failed, skip the rest of the test to avoid nil pointer dereference
+	if err != nil {
+		t.Fatalf("Failed to create engine: %v", err)
+		return
+	}
 
 	// 1. Start the proxy and check status
 	addr := "127.0.0.1:0" // Use a random free port

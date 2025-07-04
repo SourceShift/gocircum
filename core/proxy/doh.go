@@ -26,7 +26,9 @@ import (
 	"time"
 
 	"github.com/gocircum/gocircum/core/config"
+	"github.com/gocircum/gocircum/core/engine"
 	"github.com/gocircum/gocircum/pkg/logging"
+	"github.com/gocircum/gocircum/pkg/securedns"
 	utls "github.com/refraction-networking/utls"
 	"golang.org/x/crypto/argon2"
 	"golang.org/x/crypto/hkdf"
@@ -94,9 +96,95 @@ type DoHResolver struct {
 
 // NewDoHResolver creates a new DoHResolver with a default HTTP client.
 func NewDoHResolver(providers []config.DoHProvider) (*DoHResolver, error) {
-	return NewDoHResolverWithClient(providers, &http.Client{
-		Timeout: 10 * time.Second,
-	})
+	// Create a secure DNS resolver using our securedns package with improved bootstrap mechanism
+	bootstrapConfig := &securedns.BootstrapConfig{
+		BootstrapIPs: map[string][]net.IP{
+			// Primary DoH providers with hardcoded IPs to bootstrap the system
+			"dns.google":         {net.ParseIP("8.8.8.8"), net.ParseIP("8.8.4.4")},
+			"cloudflare-dns.com": {net.ParseIP("1.1.1.1"), net.ParseIP("1.0.0.1")},
+			// Additional trusted providers for redundancy
+			"dns.quad9.net":   {net.ParseIP("9.9.9.9"), net.ParseIP("149.112.112.112")},
+			"dns.adguard.com": {net.ParseIP("94.140.14.14"), net.ParseIP("94.140.15.15")},
+		},
+		// Add fallback IPs for resilience
+		FallbackIPs: map[string][]net.IP{
+			"dns.google":         {net.ParseIP("8.8.8.8"), net.ParseIP("8.8.4.4")},
+			"cloudflare-dns.com": {net.ParseIP("1.1.1.1"), net.ParseIP("1.0.0.1")},
+		},
+		TrustedProviders: []string{"dns.google", "cloudflare-dns.com", "dns.quad9.net", "dns.adguard.com"},
+		RefreshInterval:  86400, // 24 hours in seconds
+	}
+
+	options := &securedns.Options{
+		CacheSize:                1000,
+		CacheTTL:                 1800, // 30 minutes in seconds
+		Timeout:                  5,    // 5 seconds
+		RetryCount:               3,
+		VerifyBootstrapIntegrity: true,                                                                                                                  // Enable integrity verification
+		BlockFallback:            true,                                                                                                                  // Prevent falling back to insecure methods
+		UserAgent:                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36", // Realistic user agent
+	}
+
+	// Create a secure DNS resolver
+	resolver, err := securedns.NewDoHResolver(bootstrapConfig, options)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create secure DNS resolver: %w", err)
+	}
+
+	// Preload the IP cache with known DoH providers from the configuration
+	ipCache := make(map[string][]net.IP)
+	for _, provider := range providers {
+		if len(provider.Bootstrap) > 0 {
+			// Extract domain from URL
+			parsedURL, err := url.Parse(provider.URL)
+			if err != nil {
+				continue
+			}
+
+			// Convert string IPs to net.IP
+			ips := make([]net.IP, 0, len(provider.Bootstrap))
+			for _, ipStr := range provider.Bootstrap {
+				if ip := net.ParseIP(ipStr); ip != nil {
+					ips = append(ips, ip)
+				}
+			}
+
+			if len(ips) > 0 {
+				ipCache[parsedURL.Hostname()] = ips
+			}
+		}
+	}
+
+	// Preload the resolver's cache with our IP mappings
+	resolver.PreloadCache(ipCache)
+
+	// Create a secure HTTP client factory
+	httpFactory, err := engine.NewSecureHTTPClientFactory(resolver)
+	if err != nil {
+		if closeErr := resolver.Close(); closeErr != nil {
+			return nil, fmt.Errorf("failed to create secure HTTP client factory: %w (and close error: %v)", err, closeErr)
+		}
+		return nil, fmt.Errorf("failed to create secure HTTP client factory: %w", err)
+	}
+
+	// Create a secure HTTP client
+	client, err := httpFactory.NewHTTPClient(10 * time.Second)
+	if err != nil {
+		if closeErr := httpFactory.Close(); closeErr != nil {
+			if resolverCloseErr := resolver.Close(); resolverCloseErr != nil {
+				return nil, fmt.Errorf("failed to create secure HTTP client: %w (and close errors: httpFactory: %v, resolver: %v)",
+					err, closeErr, resolverCloseErr)
+			}
+			return nil, fmt.Errorf("failed to create secure HTTP client: %w (and close error: %v)", err, closeErr)
+		}
+		if resolverCloseErr := resolver.Close(); resolverCloseErr != nil {
+			return nil, fmt.Errorf("failed to create secure HTTP client: %w (and resolver close error: %v)",
+				err, resolverCloseErr)
+		}
+		return nil, fmt.Errorf("failed to create secure HTTP client: %w", err)
+	}
+
+	return NewDoHResolverWithClient(providers, client)
 }
 
 // NewDoHResolverWithClient creates a new DoHResolver with a custom HTTP client.
