@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"math/rand"
 	"net/http"
 	"strings"
 	"sync"
@@ -14,6 +13,7 @@ import (
 	"github.com/gocircum/gocircum/core/engine"
 	"github.com/gocircum/gocircum/pkg/logging"
 	"github.com/gocircum/gocircum/pkg/securedns"
+	"github.com/gocircum/gocircum/pkg/securerandom"
 )
 
 // HTTPSDiscoveryChannel implements bootstrap discovery via HTTPS requests
@@ -299,5 +299,5 @@ func getRandomUserAgent() string {
 		"Mozilla/5.0 (iPhone; CPU iPhone OS 14_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.0 Mobile/15E148 Safari/604.1",
 	}
 
-	return userAgents[rand.Intn(len(userAgents))]
+	return userAgents[securerandom.MustInt(0, len(userAgents)-1)]
 }

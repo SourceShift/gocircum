@@ -24,10 +24,6 @@ node_modules/
 # OS specific
 .DS_Store
 
-# Task files
-tasks.json
-tasks/ 
-
 .cursor-rules.json
 .cursor
 .windsurfrules
@@ -42,3 +38,14 @@ coverage.out
 # New directory
 /bin/
 README-task-master.md
+
+.clinerules/
+.github/instructions/
+.roo/
+.roomodes
+.taskmaster/
+.trae/
+.windsurf/
+AGENTS.md
+CLAUDE.md
+tasks/

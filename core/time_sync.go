@@ -3,7 +3,6 @@ package core
 import (
 	"encoding/json"
 	"fmt"
-	"math/rand"
 	"net"
 	"os"
 	"path/filepath"
@@ -11,6 +10,7 @@ import (
 	"time"
 
 	"github.com/gocircum/gocircum/pkg/logging"
+	"github.com/gocircum/gocircum/pkg/securerandom"
 )
 
 const (
@@ -208,7 +208,12 @@ func (ts *TimeSynchronizer) IsTimeAccurate() bool {
 // refreshLoop periodically refreshes the time from NTP servers
 func (ts *TimeSynchronizer) refreshLoop() {
 	// Add some jitter to prevent thundering herd
-	jitter := time.Duration(rand.Int63n(int64(30 * time.Second)))
+	jitterSecs, err := securerandom.Int(0, 30)
+	if err != nil {
+		ts.logger.Warn("Failed to generate secure random jitter, using default", "error", err)
+		jitterSecs = 15 // Use a middle value as default
+	}
+	jitter := time.Duration(jitterSecs) * time.Second
 	time.Sleep(jitter)
 
 	ticker := time.NewTicker(ts.config.RefreshInterval)

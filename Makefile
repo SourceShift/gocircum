@@ -132,4 +132,4 @@ clean:
 .PHONY: repomix
 repomix:
 	@echo "Running repomix with ignore patterns..."
-	repomix --ignore '**/*mock**,**/*test*,**/*.json,**/*.js,**/*.md,**/*.svg,**/*.xml,./onepager/**,**/*.py,**/*.txt,**/docs,**/LICENSE,**/Makefile' 
+	repomix --ignore '**/*mock**,**/*test*,**/*.json,**/*.js,**/*.md,**/*.svg,**/*.xml,./onepager/**,**/*.py,**/*.txt,**/docs,**/LICENSE' 

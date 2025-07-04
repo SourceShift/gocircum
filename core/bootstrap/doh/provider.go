@@ -17,7 +17,6 @@ import (
 	"io"
 	"math"
 	"math/big"
-	mathrand "math/rand"
 	"net"
 	"net/http"
 	"os"
@@ -27,6 +26,7 @@ import (
 	"time"
 
 	"github.com/gocircum/gocircum/pkg/logging"
+	"github.com/gocircum/gocircum/pkg/securerandom"
 	"golang.org/x/crypto/argon2"
 	"golang.org/x/crypto/hkdf"
 )
@@ -110,8 +110,11 @@ func (n *defaultPeerNetwork) GetRandomPeers(count int) []Peer {
 	// Shuffle the peers using crypto/rand
 	for i := len(peersCopy) - 1; i > 0; i-- {
 		// Generate random number between 0 and i
-		r := mathrand.New(mathrand.NewSource(time.Now().UnixNano()))
-		j := r.Intn(i + 1)
+		j, err := securerandom.Int(0, i+1)
+		if err != nil || j > i {
+			// Log error but continue with less randomness in worst case
+			j = i / 2 // Simple fallback that at least gives some shuffling
+		}
 
 		// Swap elements
 		peersCopy[i], peersCopy[j] = peersCopy[j], peersCopy[i]
@@ -1598,8 +1601,11 @@ func (p *Provider) getShuffledProviders() []string {
 	// Shuffle the providers using crypto/rand
 	for i := len(providers) - 1; i > 0; i-- {
 		// Generate random number between 0 and i
-		r := mathrand.New(mathrand.NewSource(time.Now().UnixNano()))
-		j := r.Intn(i + 1)
+		j, err := securerandom.Int(0, i+1)
+		if err != nil || j > i {
+			// Log error but continue with less randomness in worst case
+			j = i / 2 // Simple fallback that at least gives some shuffling
+		}
 
 		// Swap elements
 		providers[i], providers[j] = providers[j], providers[i]
@@ -1994,8 +2000,11 @@ func (p *Provider) generatePolymorphicDomains(bundle *EntropyBundle, count int) 
 // cryptoShuffle uses cryptographic randomness to shuffle a slice
 func (p *Provider) cryptoShuffle(slice []string) {
 	for i := len(slice) - 1; i > 0; i-- {
-		r := mathrand.New(mathrand.NewSource(time.Now().UnixNano()))
-		j := r.Intn(i + 1)
+		j, err := securerandom.Int(0, i+1)
+		if err != nil || j > i {
+			// Log error but continue with less randomness in worst case
+			j = i / 2 // Simple fallback that at least gives some shuffling
+		}
 
 		// Swap elements
 		slice[i], slice[j] = slice[j], slice[i]
@@ -2114,9 +2123,7 @@ func (p *Provider) getSecureBootstrapClient() (*http.Client, error) {
 			randomIndex, err := secureRandomIndex(len(ips))
 			if err != nil {
 				// Fall back to less secure random if crypto/rand fails
-				source := mathrand.NewSource(time.Now().UnixNano())
-				r := mathrand.New(source)
-				randomIndex = r.Intn(len(ips))
+				randomIndex = len(ips) / 2 // Simple fallback that uses middle of array
 			}
 			ip := ips[randomIndex]
 

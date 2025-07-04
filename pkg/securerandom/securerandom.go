@@ -3,6 +3,7 @@ package securerandom
 import (
 	"crypto/rand"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"math/big"
 	"time"
@@ -10,67 +11,146 @@ import (
 	"github.com/gocircum/gocircum/pkg/logging"
 )
 
-// Int generates a cryptographically secure random integer in the range [min, max].
-// If the crypto/rand source fails, it returns an error instead of falling back to
-// an insecure source.
+// Int returns a cryptographically secure random integer in the range [min, max].
 func Int(min, max int) (int, error) {
-	if min < 0 || max < 0 {
-		return 0, fmt.Errorf("negative numbers not supported")
-	}
-	if min > max {
-		return 0, fmt.Errorf("min cannot be greater than max")
-	}
-	if min == max {
-		return min, nil
+	if max <= min {
+		return 0, fmt.Errorf("max must be greater than min (got min=%d, max=%d)", min, max)
 	}
 
 	// Calculate the range size
-	rangeSize := big.NewInt(int64(max - min + 1))
+	rangeSize := int64(max - min + 1)
 
-	// Generate a secure random number
-	num, err := rand.Int(rand.Reader, rangeSize)
+	// Generate a random integer in the range [0, rangeSize-1]
+	nBig, err := rand.Int(rand.Reader, big.NewInt(rangeSize))
 	if err != nil {
-		return 0, fmt.Errorf("failed to generate secure random number: %w", err)
+		return 0, err
 	}
 
-	return int(num.Int64()) + min, nil
+	// Convert to int and add min to get a value in the range [min, max]
+	return int(nBig.Int64()) + min, nil
 }
 
-// MustInt generates a cryptographically secure random integer in the range [min, max].
-// If the crypto/rand source fails, it panics with an error message.
-// This should only be used when failure to generate a secure random number is catastrophic.
+// MustInt is like Int but panics on error.
+// Use this only when an error is truly unexpected and would be fatal to the program.
 func MustInt(min, max int) int {
 	result, err := Int(min, max)
 	if err != nil {
-		panic(fmt.Sprintf("CRITICAL SECURITY FAILURE: Cannot generate secure random number: %v", err))
+		panic(fmt.Sprintf("securerandom.MustInt: %v", err))
 	}
 	return result
 }
 
-// Float64 returns a cryptographically secure random float in the range [0.0, 1.0).
-// If the crypto/rand source fails, it returns an error instead of falling back to
-// an insecure source.
-func Float64() (float64, error) {
-	// We need a random 64-bit value
-	var buf [8]byte
-	_, err := rand.Read(buf[:])
-	if err != nil {
-		return 0, fmt.Errorf("failed to generate secure random float: %w", err)
+// Perm returns a random permutation of integers [0,n).
+func Perm(n int) ([]int, error) {
+	if n <= 0 {
+		return nil, fmt.Errorf("invalid argument to Perm: %d", n)
 	}
 
-	// Convert to uint64, then scale to [0, 1)
-	val := binary.BigEndian.Uint64(buf[:])
-	// Dividing by (1<<53) gives a float64 with 53 bits of precision (the max for float64)
-	return float64(val&((1<<53)-1)) / (1 << 53), nil
+	// Create a slice with values 0 to n-1
+	result := make([]int, n)
+	for i := range result {
+		result[i] = i
+	}
+
+	// Shuffle the slice
+	err := Shuffle(result, func(i, j int) {
+		result[i], result[j] = result[j], result[i]
+	})
+
+	if err != nil {
+		return nil, err
+	}
+
+	return result, nil
 }
 
-// MustFloat64 returns a cryptographically secure random float in the range [0.0, 1.0).
-// If the crypto/rand source fails, it panics with an error message.
-// This should only be used when failure to generate a secure random number is catastrophic.
+// Shuffle securely shuffles a slice using the Fisher-Yates algorithm.
+// The swap function should exchange the elements at i and j.
+func Shuffle(slice interface{}, swap func(i, j int)) error {
+	// Determine the length of the slice based on the number of calls to swap
+	length := 0
+
+	// Get the length from slice
+	switch s := slice.(type) {
+	case []int:
+		length = len(s)
+	case []string:
+		length = len(s)
+	case []byte:
+		length = len(s)
+	case []float64:
+		length = len(s)
+	case []rune:
+		length = len(s)
+	case []bool:
+		length = len(s)
+	default:
+		// Try to infer the length from the first few calls
+		// This won't work for all types but is a best effort
+		if swappable, ok := slice.(interface{ Len() int }); ok {
+			length = swappable.Len()
+		} else {
+			return errors.New("could not determine length of slice")
+		}
+	}
+
+	// No need to shuffle a slice of length 0 or 1
+	if length <= 1 {
+		return nil
+	}
+
+	// Fisher-Yates shuffle
+	for i := length - 1; i > 0; i-- {
+		// Generate a random index j such that 0 <= j <= i
+		j, err := Int(0, i)
+		if err != nil {
+			return err
+		}
+
+		// Swap elements i and j
+		swap(i, j)
+	}
+
+	return nil
+}
+
+// GetRandomBytes returns n cryptographically secure random bytes.
+func GetRandomBytes(n int) ([]byte, error) {
+	b := make([]byte, n)
+	_, err := rand.Read(b)
+	if err != nil {
+		return nil, err
+	}
+	return b, nil
+}
+
+// MustGetRandomBytes is like GetRandomBytes but panics on error.
+func MustGetRandomBytes(n int) []byte {
+	b, err := GetRandomBytes(n)
+	if err != nil {
+		panic(fmt.Sprintf("securerandom.MustGetRandomBytes: %v", err))
+	}
+	return b
+}
+
+// Float64 returns a random float64 in the range [0.0,1.0).
+func Float64() (float64, error) {
+	// Generate 8 random bytes
+	b := make([]byte, 8)
+	_, err := rand.Read(b)
+	if err != nil {
+		return 0, err
+	}
+
+	// Convert bytes to uint64 and scale to [0,1)
+	return float64(binary.BigEndian.Uint64(b)) / (1 << 64), nil
+}
+
+// MustFloat64 is like Float64 but panics on error.
 func MustFloat64() float64 {
 	result, err := Float64()
 	if err != nil {
-		panic(fmt.Sprintf("CRITICAL SECURITY FAILURE: Cannot generate secure random float: %v", err))
+		panic(fmt.Sprintf("securerandom.MustFloat64: %v", err))
 	}
 	return result
 }
@@ -121,31 +201,6 @@ func MustDuration(min, max time.Duration) time.Duration {
 	return result
 }
 
-// Perm returns a random permutation of integers [0,n).
-// It uses cryptographically secure randomness and returns an error if secure
-// randomness cannot be generated.
-func Perm(n int) ([]int, error) {
-	if n <= 0 {
-		return nil, fmt.Errorf("n must be greater than 0")
-	}
-
-	result := make([]int, n)
-	for i := 0; i < n; i++ {
-		result[i] = i
-	}
-
-	// Fisher-Yates shuffle with cryptographic randomness
-	for i := n - 1; i > 0; i-- {
-		j, err := Int(0, i)
-		if err != nil {
-			return nil, fmt.Errorf("failed to generate secure random number for permutation: %w", err)
-		}
-		result[i], result[j] = result[j], result[i]
-	}
-
-	return result, nil
-}
-
 // MustPerm returns a random permutation of integers [0,n).
 // It uses cryptographically secure randomness and panics if secure
 // randomness cannot be generated. This should only be used when failure
@@ -156,63 +211,6 @@ func MustPerm(n int) []int {
 		panic(fmt.Sprintf("CRITICAL SECURITY FAILURE: Cannot generate secure permutation: %v", err))
 	}
 	return result
-}
-
-// Shuffle securely shuffles the elements of a slice using the Fisher-Yates algorithm
-// with cryptographic randomness. If the crypto/rand source fails, it returns an error
-// instead of falling back to an insecure source.
-func Shuffle(slice interface{}, swap func(i, j int)) error {
-	// Get the length of the slice through reflection
-	n := 0
-	switch s := slice.(type) {
-	case []int:
-		n = len(s)
-	case []string:
-		n = len(s)
-	case []byte:
-		n = len(s)
-	case []float64:
-		n = len(s)
-	default:
-		// Try to determine length safely with a limited number of attempts
-		n = 0
-		maxTries := 1000 // Set a reasonable upper limit
-
-		for i := 0; i < maxTries; i++ {
-			success := true
-			func() {
-				defer func() {
-					if r := recover(); r != nil {
-						success = false
-					}
-				}()
-				swap(i, i) // Test if this index is valid
-			}()
-
-			if !success {
-				break // We've hit the end of the slice
-			}
-			n = i + 1
-		}
-
-		if n == 0 {
-			return fmt.Errorf("could not determine slice length or slice is empty")
-		}
-	}
-
-	if n <= 1 {
-		return nil
-	}
-
-	for i := n - 1; i > 0; i-- {
-		j, err := Int(0, i)
-		if err != nil {
-			return err
-		}
-		swap(i, j)
-	}
-
-	return nil
 }
 
 // MustShuffle securely shuffles the elements of a slice using the Fisher-Yates algorithm
