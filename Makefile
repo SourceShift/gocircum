@@ -21,21 +21,21 @@ all: build-cli build-mobile
 # Help target to display available commands
 .PHONY: help
 help:
-	@echo "Usage: make <target>"
-	@echo ""
-	@echo "Targets:"
-	@echo "  all              Build all artifacts (CLI and mobile libraries)"
-	@echo "  install-deps     Install Go mobile and linter dependencies"
-	@echo "  build-cli        Build the gocircum-cli application"
-	@echo "  build-mobile     Build mobile libraries for iOS and Android"
-	@echo "  android          Build the Android .aar library"
-	@echo "  ios              Build the iOS .xcframework"
-	@echo "  test             Run all Go tests"
-	@echo "  test-race        Run all Go tests with the race detector"
-	@echo "  lint             Lint the codebase with golangci-lint"
-	@echo "  tidy             Tidy go.mod and go.sum files"
-	@echo "  clean            Remove all build artifacts"
+	@echo "Available commands:"
+	@echo "  build            Build the project"
+	@echo "  clean            Clean build artifacts"
+	@echo "  deps             Install dependencies"
 	@echo "  help             Show this help message"
+	@echo "  install-deps     Install required tools"
+	@echo "  lint             Lint the codebase with golangci-lint"
+	@echo "  lint-mathrandom  Check for insecure math/rand usage"
+	@echo "  lint-dnsleaks    Check for DNS leaks"
+	@echo "  lint-all         Run all linters (golangci-lint, mathrandom, and dnsleaks)"
+	@echo "  tidy             Tidy go.mod and go.sum files"
+	@echo "  test             Run tests"
+	@echo "  test-race        Run tests with race detector"
+	@echo "  test-all         Run all tests including integration tests"
+	@echo "  coverage         Generate test coverage report"
 
 # Dependency installation
 .PHONY: install-deps
@@ -92,6 +92,30 @@ lint:
 	@echo "Linting code..."
 	@command -v $(GOLINT) >/dev/null 2>&1 || { echo >&2 "golangci-lint not found. Please run 'make install-deps'"; exit 1; }
 	$(GOLINT) run ./...
+
+.PHONY: lint-mathrandom
+lint-mathrandom:
+	@echo "Checking for insecure math/rand usage..."
+	@mkdir -p $(BIN_DIR)
+	@if [ ! -f "$(BIN_DIR)/mathrandom-linter" ]; then \
+		echo "Building mathrandom-linter..."; \
+		$(GOBUILD) -o $(BIN_DIR)/mathrandom-linter ./cmd/mathrandom-linter; \
+	fi
+	$(BIN_DIR)/mathrandom-linter -dir=. -exempt-file=./configs/mathrandom-exempt.json
+
+.PHONY: lint-dnsleaks
+lint-dnsleaks:
+	@echo "Checking for DNS leaks..."
+	@mkdir -p $(BIN_DIR)
+	@if [ ! -f "$(BIN_DIR)/dnsleaks-linter" ]; then \
+		echo "Building dnsleaks-linter..."; \
+		$(GOBUILD) -o $(BIN_DIR)/dnsleaks-linter ./cmd/dnsleaks-linter; \
+	fi
+	$(BIN_DIR)/dnsleaks-linter -dir=. -exempt-file=./configs/dnsleaks-exempt.json
+
+.PHONY: lint-all
+lint-all: lint lint-mathrandom lint-dnsleaks
+	@echo "All linting checks completed"
 
 # Dependency management
 .PHONY: tidy

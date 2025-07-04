@@ -28,6 +28,7 @@ A modular and adaptable censorship circumvention framework designed for resilien
   - [Running the Proxy](#running-the-proxy)
 - [Configuration](#configuration)
 - [Security](#security)
+  - [Secure Random Number Generation](#secure-random-number-generation)
   - [Maintained Dependencies](#maintained-dependencies)
 - [Development](#development)
 - [Contributing](#contributing)
@@ -203,6 +204,27 @@ fingerprints:
 
 ## Security
 
+### Secure Random Number Generation
+
+The project strictly enforces the use of cryptographically secure random number generation through:
+
+- A custom static analysis tool (`mathrandom-linter`) that detects and prevents the use of insecure `math/rand` in favor of `crypto/rand` or our `pkg/securerandom` package
+- Pre-commit hooks that block code containing insecure random number generation
+- Comprehensive CI/CD pipeline integration that fails builds with insecure randomness
+- Clear developer documentation in `docs/security/randomness.md`
+
+Run the secure RNG linter locally:
+```sh
+make lint-mathrandom
+```
+
+Install the pre-commit hook:
+```sh
+./scripts/install-hooks.sh
+```
+
+See [Randomness Security Guidelines](docs/security/randomness.md) for details.
+
 ### Maintained Dependencies
 
 The project prioritizes security by ensuring that all third-party dependencies are properly maintained and secure. In particular:
@@ -227,19 +249,26 @@ If you identify any security concerns with our dependencies, please report them 
     make install-deps
     ```
 
-2.  **Run tests:**
+2.  **Install git hooks:**
+    ```sh
+    ./scripts/install-hooks.sh
+    ```
+
+3.  **Run tests:**
     ```sh
     make test
     ```
 
-3.  **Run tests with the race detector:**
+4.  **Run tests with the race detector:**
     ```sh
     make test-race
     ```
 
-4.  **Lint the codebase:**
+5.  **Lint the codebase:**
     ```sh
-    make lint
+    make lint         # Standard Go linting
+    make lint-mathrandom  # Check for insecure math/rand usage
+    make lint-all     # Run all linters
     ```
 
 ## Contributing

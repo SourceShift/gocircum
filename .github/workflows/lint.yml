@@ -44,3 +44,71 @@ jobs:
 
           # Optional: if set to true then the action don't cache or restore ~/.cache/go-build.
           # skip-build-cache: true 
+
+  mathrandom-linter:
+    name: mathrandom-lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+          cache: false
+      
+      - name: Build mathrandom-linter
+        run: |
+          mkdir -p bin
+          go build -o bin/mathrandom-linter ./cmd/mathrandom-linter/main.go
+      
+      - name: Run mathrandom-linter
+        run: |
+          ./bin/mathrandom-linter -dir=. -exempt-file=./configs/mathrandom-exempt.json
+        
+      - name: Check for Exemption Expiry
+        run: |
+          # Also run in strict mode to alert on expired exemptions (but don't fail the build)
+          ./bin/mathrandom-linter -dir=. -exempt-file=./configs/mathrandom-exempt.json -strict || echo "WARNING: Some exemptions have expired. Please review configs/mathrandom-exempt.json"
+
+  dnsleaks-linter:
+    name: dnsleaks-lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+          cache: false
+      
+      - name: Build dnsleaks-linter
+        run: |
+          mkdir -p bin
+          go build -o bin/dnsleaks-linter ./cmd/dnsleaks-linter/main.go
+      
+      - name: Run dnsleaks-linter
+        run: |
+          ./bin/dnsleaks-linter -dir=. -exempt-file=./configs/dnsleaks-exempt.json
+        
+      - name: Check for Exemption Expiry
+        run: |
+          # Also run in strict mode to alert on expired exemptions (but don't fail the build)
+          ./bin/dnsleaks-linter -dir=. -exempt-file=./configs/dnsleaks-exempt.json -strict || echo "WARNING: Some exemptions have expired. Please review configs/dnsleaks-exempt.json"
+
+  dnsleaks-tests:
+    name: dnsleaks-tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+          cache: false
+      
+      - name: Run DNS leak integration tests
+        run: |
+          # Run specific DNS leak tests that don't require sudo privileges
+          go test -v ./pkg/securedns/... -run 'TestSystemDNSResolverBlocked|TestSecureResolverWorks|TestHelperFunctionsPreventLeaks|TestDNSLeakMonitorPreventsDirectCalls'
+      
+      - name: Run DNS leak protection unit tests
+        run: |
+          # Run tests for DNS leak protection in the security package
+          go test -v ./core/security/... -run 'TestDNSLeak' 
