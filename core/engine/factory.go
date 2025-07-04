@@ -10,8 +10,6 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
-	"math/big"
-	"math/rand"
 	"net"
 	"net/http"
 	"strconv"
@@ -22,9 +20,8 @@ import (
 	"github.com/gocircum/gocircum/core/constants"
 	"github.com/gocircum/gocircum/core/transport"
 	"github.com/gocircum/gocircum/pkg/logging"
+	"github.com/gocircum/gocircum/pkg/securerandom"
 	"golang.org/x/crypto/ocsp"
-
-	crypto_rand "crypto/rand"
 
 	utls "github.com/refraction-networking/utls"
 )
@@ -78,6 +75,8 @@ type DialerFactory interface {
 }
 
 // DefaultDialerFactory is the default implementation of DialerFactory.
+// DEPRECATED: This implementation does not securely resolve DNS and may leak queries.
+// Use SecureDialerFactory instead which provides proper DNS leak protection.
 type DefaultDialerFactory struct {
 	GetRootCAs func() *x509.CertPool
 }
@@ -90,6 +89,10 @@ func NewDefaultDialerFactory(getRootCAs func() *x509.CertPool) DialerFactory {
 // NewDialer creates a new network dialer based on the transport configuration.
 // It returns a function that can be used to establish a connection.
 func (f *DefaultDialerFactory) NewDialer(transportCfg *config.Transport, tlsCfg *config.TLS) (Dialer, error) {
+	logging.GetLogger().Warn("Security warning: DefaultDialerFactory.NewDialer is deprecated and may cause DNS leaks",
+		"resolution", "Use SecureDialerFactory instead for secure DNS resolution",
+		"timestamp", time.Now().Unix())
+
 	var baseDialer transport.Transport
 	var err error
 
@@ -123,19 +126,16 @@ func (f *DefaultDialerFactory) NewDialer(transportCfg *config.Transport, tlsCfg 
 		if err != nil {
 			return nil, fmt.Errorf("invalid port: %w", err)
 		}
-		// In a real scenario, DNS resolution would happen here, but the interface expects a pre-resolved IP.
-		// For now, we'll assume the host is an IP for the base dialer.
+
+		// This is insecure and will be removed in the future. Use SecureDialerFactory instead.
 		ip := net.ParseIP(host)
 		if ip == nil {
-			// This is a simplification. A real implementation would use a secure resolver.
-			ips, err := net.LookupIP(host)
-			if err != nil {
-				return nil, fmt.Errorf("dns lookup failed for %s: %w", host, err)
+			return nil, &SecureError{
+				Code:            "DNS_LEAK_PROTECTION",
+				Type:            "security_violation",
+				Context:         "dns_resolution",
+				internalDetails: "DefaultDialerFactory cannot securely resolve hostnames. Use SecureDialerFactory instead.",
 			}
-			if len(ips) == 0 {
-				return nil, fmt.Errorf("no IPs found for %s", host)
-			}
-			ip = ips[0]
 		}
 
 		conn, err := baseDialer.DialContext(ctx, network, ip, port)
@@ -260,11 +260,19 @@ func buildQUICUTLSConfig(cfg *config.TLS, rootCAs *x509.CertPool) (*utls.Config,
 	}
 	config := &utls.Config{
 		ServerName:         cfg.ServerName,
-		InsecureSkipVerify: cfg.InsecureSkipVerify,
+		InsecureSkipVerify: false,
 		RootCAs:            rootCAs,
 		MinVersion:         minVersion,
 		MaxVersion:         maxVersion,
 		NextProtos:         []string{"h2", "http/1.1"},
+		VerifyConnection: func(cs utls.ConnectionState) error {
+			// Convert PeerCertificates from []*x509.Certificate to [][]byte
+			rawCerts := make([][]byte, len(cs.PeerCertificates))
+			for i, cert := range cs.PeerCertificates {
+				rawCerts[i] = cert.Raw
+			}
+			return comprehensiveCertificateValidation(cs.ServerName, rawCerts, cs.VerifiedChains)
+		},
 	}
 	return config, nil
 }
@@ -290,7 +298,7 @@ func BuildUTLSConfig(cfg *config.TLS, rootCAs *x509.CertPool) (*utls.Config, err
 
 	return &utls.Config{
 		ServerName:         cfg.ServerName,
-		InsecureSkipVerify: cfg.InsecureSkipVerify,
+		InsecureSkipVerify: false,
 		RootCAs:            rootCAs,
 		MinVersion:         minVersion,
 		MaxVersion:         maxVersion,
@@ -355,8 +363,6 @@ type TrafficProfile struct {
 
 // selectTrafficProfile dynamically chooses a traffic model to mimic.
 func (c *fragmentingConn) selectTrafficProfile() *TrafficProfile {
-	// In a real system, this would be more complex, selecting from many profiles
-	// based on time of day, destination, etc.
 	return &TrafficProfile{
 		PacketSizeDistribution: map[int]int{
 			// Simulating a mix of small control packets and larger data packets.
@@ -366,7 +372,16 @@ func (c *fragmentingConn) selectTrafficProfile() *TrafficProfile {
 			1460: 40, // Full-sized data packets
 		},
 		InterPacketDelay: func() time.Duration {
-			return time.Duration(rand.Intn(100)+50) * time.Millisecond
+			// Use the secure random generator that properly handles errors
+			d, err := securerandom.Duration(50*time.Millisecond, 150*time.Millisecond)
+			if err != nil {
+				// Log the error but continue with a safe default value
+				logging.GetLogger().Error("Failed to generate secure random delay",
+					"error", err,
+					"action", "using safe default")
+				return 100 * time.Millisecond // Safe default
+			}
+			return d
 		},
 	}
 }
@@ -733,16 +748,6 @@ func isCriticalDomain(domain string) bool {
 
 // cryptoRandInt generates a cryptographically secure random integer in the range [min, max].
 func cryptoRandInt(min, max int) (int, error) {
-	if max <= min {
-		return min, nil
-	}
-	rangeSize := big.NewInt(int64(max - min + 1))
-	num, err := crypto_rand.Int(crypto_rand.Reader, rangeSize)
-	if err != nil {
-		// Fallback to a less secure random source if the crypto source fails.
-		// Log this event as it's a potential security issue.
-		logging.GetLogger().Warn("Cryptographically secure random source failed, falling back to insecure source.", "error", err)
-		return rand.Intn(max-min+1) + min, nil
-	}
-	return int(num.Int64()) + min, nil
+	// Use the centralized secure random package
+	return securerandom.Int(min, max)
 }
