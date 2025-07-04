@@ -1,0 +1,22 @@
+[
+  {
+    "Path": "core/time_sync.go",
+    "Reason": "Used only for jitter in refresh loop to prevent thundering herd problem. Not security-critical.",
+    "ExpiryDate": "2024-12-31"
+  },
+  {
+    "Path": "core/bootstrap/channels/dns_channel.go",
+    "Reason": "Used only for shuffling domain lists in a test-specific domain generator. Should be migrated to securerandom.",
+    "ExpiryDate": "2024-12-31"
+  },
+  {
+    "Path": "core/bootstrap/channels/https_channel.go",
+    "Reason": "Used only for selecting a random user agent. Not security-critical but should be migrated to securerandom.",
+    "ExpiryDate": "2024-12-31"
+  },
+  {
+    "Path": "testutils/",
+    "Reason": "Test utilities may use math/rand for deterministic testing where crypto/rand would make tests non-deterministic.",
+    "ExpiryDate": ""
+  }
+]

@@ -1,0 +1,26 @@
+[
+  {
+    "Path": "cmd/dnstest/main.go",
+    "Reason": "This is a test tool that explicitly tests DNS resolution, including system DNS for comparison"
+  },
+  {
+    "Path": "core/security/dns_safeguards_test.go",
+    "Reason": "Test file that needs to trigger the DNS leak monitor to verify it works"
+  },
+  {
+    "Path": "core/api.go",
+    "Reason": "Manages the DNS interceptor which needs to reference net.DefaultResolver but wraps it securely"
+  },
+  {
+    "Path": "core/security/dns_safeguards.go",
+    "Reason": "Implementation of DNS leak safeguards that needs to interact with net.DefaultResolver"
+  },
+  {
+    "Path": "pkg/securedns/leaktest.go",
+    "Reason": "Tool for testing DNS leaks that needs to interact with system DNS for comparison"
+  },
+  {
+    "Path": "pkg/securedns/securedns_test.go",
+    "Reason": "Test file that compares secure DNS with system DNS for verification"
+  }
+] 
