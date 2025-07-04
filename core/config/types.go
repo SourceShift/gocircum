@@ -6,6 +6,8 @@ import (
 	"runtime"
 	"strings"
 	"time"
+
+	"gopkg.in/yaml.v3"
 )
 
 // FileConfig represents the top-level structure of a configuration file.
@@ -116,25 +118,58 @@ type Fragmentation struct {
 
 // TLS configures the TLS layer.
 type TLS struct {
-	Library       string         `yaml:"library,omitempty"` // e.g., "utls"
-	ClientHelloID string         `yaml:"client_hello_id,omitempty"`
-	UserAgent     string         `yaml:"user_agent,omitempty"`
-	ServerName    string         `yaml:"server_name,omitempty"`
-	RootCAs       *x509.CertPool `yaml:"-"` // This will not be marshalled from/to YAML.
-	// InsecureSkipVerify should be false in production. Only use for testing.
-	InsecureSkipVerify bool          `yaml:"insecure_skip_verify,omitempty"`
-	MinVersion         string        `yaml:"min_version,omitempty"` // e.g., "1.2"
-	MaxVersion         string        `yaml:"max_version,omitempty"` // e.g., "1.3"
-	CipherSuites       []string      `yaml:"cipher_suites,omitempty"`
-	ALPN               []string      `yaml:"alpn,omitempty"`
-	ECHEnabled         bool          `yaml:"ech_enabled,omitempty"`
-	ECHConfig          string        `yaml:"ech_config,omitempty"`
-	UTLSParrot         string        `yaml:"utls_parrot,omitempty"`
-	QUICNextProtos     []string      `yaml:"quic_next_protos,omitempty"`
-	QUICIdleTimeout    time.Duration `yaml:"quic_idle_timeout,omitempty"`
+	Library         string         `yaml:"library,omitempty"` // e.g., "utls"
+	ClientHelloID   string         `yaml:"client_hello_id,omitempty"`
+	UserAgent       string         `yaml:"user_agent,omitempty"`
+	ServerName      string         `yaml:"server_name,omitempty"`
+	RootCAs         *x509.CertPool `yaml:"-"`                     // This will not be marshalled from/to YAML.
+	MinVersion      string         `yaml:"min_version,omitempty"` // e.g., "1.2"
+	MaxVersion      string         `yaml:"max_version,omitempty"` // e.g., "1.3"
+	CipherSuites    []string       `yaml:"cipher_suites,omitempty"`
+	ALPN            []string       `yaml:"alpn,omitempty"`
+	ECHEnabled      bool           `yaml:"ech_enabled,omitempty"`
+	ECHConfig       string         `yaml:"ech_config,omitempty"`
+	UTLSParrot      string         `yaml:"utls_parrot,omitempty"`
+	QUICNextProtos  []string       `yaml:"quic_next_protos,omitempty"`
+	QUICIdleTimeout time.Duration  `yaml:"quic_idle_timeout,omitempty"`
+
+	// Internal field to store the raw YAML content for validation
+	rawContent []byte `yaml:"-"`
 }
 
-// Validate enforces security policies on the TLS configuration.
+// UnmarshalYAML implements the yaml.Unmarshaler interface.
+func (t *TLS) UnmarshalYAML(unmarshal func(interface{}) error) error {
+	// Store the raw content for security validation
+	var rawMap map[string]interface{}
+	if err := unmarshal(&rawMap); err != nil {
+		return err
+	}
+
+	// Check for insecure_skip_verify in the raw map
+	if _, exists := rawMap["insecure_skip_verify"]; exists {
+		return fmt.Errorf("security policy violation: certificate validation bypassing (insecure_skip_verify) is not allowed")
+	}
+
+	// Marshal the raw map to keep a copy of the original content
+	rawContent, err := yaml.Marshal(rawMap)
+	if err != nil {
+		return err
+	}
+
+	// Use a temporary type to avoid infinite recursion
+	type TLSAlias TLS
+	alias := (*TLSAlias)(t)
+	if err := unmarshal(alias); err != nil {
+		return err
+	}
+
+	// Store the raw content for later use in validation
+	t.rawContent = rawContent
+
+	return nil
+}
+
+// Validate ensures the TLS configuration is valid.
 func (t *TLS) Validate() error {
 	// A TLS block might be empty in the config, in which case it's a no-op.
 	// We only validate if there are properties set.
@@ -151,6 +186,7 @@ func (t *TLS) Validate() error {
 	if t.ClientHelloID == "" {
 		return fmt.Errorf("security policy violation: tls.client_hello_id must be specified")
 	}
+
 	return nil
 }
 

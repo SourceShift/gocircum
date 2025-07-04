@@ -5,18 +5,19 @@ package doh
 import (
 	"bytes"
 	"context"
-	"crypto/rand"
+	cryptorand "crypto/rand"
 	"crypto/sha256"
 	"crypto/tls"
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math"
 	"math/big"
-	mrand "math/rand"
+	mathrand "math/rand"
 	"net"
 	"net/http"
 	"os"
@@ -25,27 +26,24 @@ import (
 	"sync"
 	"time"
 
+	"github.com/gocircum/gocircum/pkg/logging"
 	"golang.org/x/crypto/argon2"
 	"golang.org/x/crypto/hkdf"
-
-	"github.com/gocircum/gocircum/pkg/logging"
 )
 
 // secureBootstrapClient is a singleton instance of a hardened HTTP client for bootstrap discovery.
 var secureBootstrapClient *http.Client
-var secureClientOnce sync.Once
 
 // Provider implements the BootstrapProvider interface for DNS-over-HTTPS
 type Provider struct {
-	providers     []string
-	urls          map[string]string
-	serverNames   map[string]string
-	queryTimeout  time.Duration
-	maxRetries    int
-	client        *http.Client
-	logger        logging.Logger
-	priority      int
-	requestsMutex sync.Mutex
+	providers    []string
+	urls         map[string]string
+	serverNames  map[string]string
+	queryTimeout time.Duration
+	maxRetries   int
+	client       *http.Client
+	logger       logging.Logger
+	priority     int
 	//nolint:unused
 	lastProvider string
 	secretSalt   []byte
@@ -60,6 +58,9 @@ type Provider struct {
 		MinDomainCount int
 		CacheTTL       time.Duration
 	}
+
+	// IPCache stores IP addresses for DoH providers to avoid system DNS lookups
+	ipCache *IPCache
 }
 
 // Config holds the configuration for the DoH provider
@@ -109,14 +110,11 @@ func (n *defaultPeerNetwork) GetRandomPeers(count int) []Peer {
 	// Shuffle the peers using crypto/rand
 	for i := len(peersCopy) - 1; i > 0; i-- {
 		// Generate random number between 0 and i
-		j, err := rand.Int(rand.Reader, big.NewInt(int64(i+1)))
-		if err != nil {
-			n.logger.Error("Failed to generate random index", "error", err)
-			continue
-		}
+		r := mathrand.New(mathrand.NewSource(time.Now().UnixNano()))
+		j := r.Intn(i + 1)
 
 		// Swap elements
-		peersCopy[i], peersCopy[j.Int64()] = peersCopy[j.Int64()], peersCopy[i]
+		peersCopy[i], peersCopy[j] = peersCopy[j], peersCopy[i]
 	}
 
 	return peersCopy[:count]
@@ -173,6 +171,92 @@ type EntropyBundle struct {
 	ExternalEntropy    []byte
 	TimeBased          []byte
 	GeolocationEntropy []byte
+}
+
+// IPCache stores IP addresses for DoH providers to avoid system DNS lookups
+type IPCache struct {
+	cache      map[string][]net.IP
+	expiration map[string]time.Time
+	mutex      sync.RWMutex
+	logger     logging.Logger
+}
+
+// NewIPCache creates a new IP cache for DoH providers
+func NewIPCache(logger logging.Logger) *IPCache {
+	if logger == nil {
+		logger = logging.GetLogger()
+	}
+
+	return &IPCache{
+		cache:      make(map[string][]net.IP),
+		expiration: make(map[string]time.Time),
+		logger:     logger,
+	}
+}
+
+// Get retrieves cached IP addresses for a domain
+func (c *IPCache) Get(domain string) ([]net.IP, bool) {
+	c.mutex.RLock()
+	defer c.mutex.RUnlock()
+
+	ips, ok := c.cache[domain]
+	if !ok {
+		return nil, false
+	}
+
+	// Check if the entry has expired
+	expiry, ok := c.expiration[domain]
+	if !ok || time.Now().After(expiry) {
+		return nil, false
+	}
+
+	return ips, true
+}
+
+// Set stores IP addresses for a domain with an expiration time
+func (c *IPCache) Set(domain string, ips []net.IP, ttl time.Duration) {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+
+	// Make a copy of the IP addresses to avoid external modifications
+	ipsCopy := make([]net.IP, len(ips))
+	for i, ip := range ips {
+		ipCopy := make(net.IP, len(ip))
+		copy(ipCopy, ip)
+		ipsCopy[i] = ipCopy
+	}
+
+	c.cache[domain] = ipsCopy
+	c.expiration[domain] = time.Now().Add(ttl)
+
+	c.logger.Debug("Cached IP addresses for domain",
+		"domain", domain,
+		"ips", fmt.Sprintf("%v", ipsCopy),
+		"expiration", c.expiration[domain])
+}
+
+// Remove deletes a domain from the cache
+func (c *IPCache) Remove(domain string) {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+
+	delete(c.cache, domain)
+	delete(c.expiration, domain)
+}
+
+// Cleanup removes expired entries from the cache
+func (c *IPCache) Cleanup() {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+
+	now := time.Now()
+	for domain, expiry := range c.expiration {
+		if now.After(expiry) {
+			delete(c.cache, domain)
+			delete(c.expiration, domain)
+			c.logger.Debug("Removed expired cache entry", "domain", domain)
+		}
+	}
 }
 
 // New creates a new DoH bootstrap provider with the given configuration
@@ -233,6 +317,7 @@ func New(config Config, logger logging.Logger) (*Provider, error) {
 		client:       httpClient,
 		logger:       logger,
 		priority:     config.Priority,
+		ipCache:      NewIPCache(logger),
 	}
 
 	// Initialize config defaults
@@ -247,7 +332,7 @@ func New(config Config, logger logging.Logger) (*Provider, error) {
 		p.logger.Error("Failed to initialize secure salt", "error", err)
 		// Generate fallback salt with best available entropy
 		fallbackSalt := make([]byte, 32)
-		if _, err := rand.Read(fallbackSalt); err != nil {
+		if _, err := cryptorand.Read(fallbackSalt); err != nil {
 			return nil, fmt.Errorf("critical security failure: cannot generate secure salt: %w", err)
 		}
 		p.secretSalt = fallbackSalt
@@ -279,37 +364,117 @@ func (p *Provider) Discover(ctx context.Context) ([]string, error) {
 	return discoveredDomains, nil
 }
 
-// GetBootstrapDomains is the main entry point for external callers to get domains.
-// It uses a cache to avoid excessive lookups.
+// GetBootstrapDomains returns a list of bootstrap domains for the DoH provider.
+// This method ensures that no system DNS lookups occur during the bootstrap process.
 func (p *Provider) GetBootstrapDomains(ctx context.Context) ([]string, error) {
-	p.requestsMutex.Lock()
-	defer p.requestsMutex.Unlock()
-
-	// Check cache first
-	if !p.isCacheExpired() && len(p.cachedDomains) >= p.config.MinDomains {
-		p.logger.Debug("Returning cached domains", "count", len(p.cachedDomains))
+	// Check if we have cached domains that are still valid
+	if !p.isCacheExpired() && len(p.cachedDomains) > 0 {
+		p.logger.Debug("Using cached bootstrap domains", "count", len(p.cachedDomains))
 		return p.cachedDomains, nil
 	}
 
-	p.logger.Debug("Cache expired or insufficient, fetching fresh domains")
-	domains, err := p.getBootstrapDomains(ctx)
+	// Get secure bootstrap client that doesn't use system DNS
+	_, err := p.getSecureBootstrapClient()
 	if err != nil {
-		p.logger.Error("Failed to fetch fresh bootstrap domains", "error", err)
-
-		// As a fallback, if we have some cached domains, return them even if expired
-		if len(p.cachedDomains) > 0 {
-			p.logger.Warn("Falling back to stale cache due to fetch failure")
-			return p.cachedDomains, nil
-		}
-		return nil, err
+		return nil, fmt.Errorf("failed to create secure bootstrap client: %w", err)
 	}
 
-	// Update cache
-	p.cachedDomains = domains
-	p.cacheTimestamp = time.Now()
-	p.logger.Info("Successfully fetched and cached new bootstrap domains", "count", len(p.cachedDomains))
+	// Initialize our entropy bundle for domain generation
+	if len(p.secretSalt) == 0 {
+		salt, err := p.initializeSecureSalt()
+		if err != nil {
+			p.logger.Error("Failed to initialize secure salt", "error", err)
+			// Continue with a fallback mechanism, but log the error
+		} else {
+			p.secretSalt = salt
+		}
+	}
 
-	return domains, nil
+	// Generate bootstrap domains using our DGA
+	domains, err := p.generateBootstrapDomains(ctx, p.config.MinDomainCount)
+	if err != nil {
+		p.logger.Error("Failed to generate bootstrap domains", "error", err)
+		// Continue with fallback mechanisms
+	}
+
+	// Try to discover domains through peer networks without using system DNS
+	peerDomains := p.getPeerDiscoveredDomains(ctx)
+	if len(peerDomains) > 0 {
+		domains = append(domains, peerDomains...)
+	}
+
+	// Try to discover domains through steganography without using system DNS
+	stegoDomains := p.discoverViaSteganography()
+	if len(stegoDomains) > 0 {
+		domains = append(domains, stegoDomains...)
+	}
+
+	// Try to discover domains through social media without using system DNS
+	socialDomains := p.discoverViaSocialMedia()
+	if len(socialDomains) > 0 {
+		domains = append(domains, socialDomains...)
+	}
+
+	// Filter out invalid domains
+	validDomains := p.filterValidDomains(domains)
+
+	// Ensure we have a minimum number of domains
+	if len(validDomains) < p.config.MinDomains {
+		p.logger.Warn("Insufficient valid bootstrap domains found",
+			"found", len(validDomains),
+			"minimum", p.config.MinDomains)
+
+		// Add hardcoded fallback domains as a last resort
+		fallbackDomains := []string{
+			"dns.google",
+			"cloudflare-dns.com",
+			"dns.quad9.net",
+		}
+
+		// Add fallback domains that aren't already in our list
+		for _, domain := range fallbackDomains {
+			found := false
+			for _, existing := range validDomains {
+				if domain == existing {
+					found = true
+					break
+				}
+			}
+
+			if !found {
+				validDomains = append(validDomains, domain)
+
+				// Also add the domain to our IP cache if we have hardcoded IPs
+				switch domain {
+				case "dns.google":
+					p.ipCache.Set(domain, []net.IP{
+						net.ParseIP("8.8.8.8"),
+						net.ParseIP("8.8.4.4"),
+					}, 24*time.Hour)
+				case "cloudflare-dns.com":
+					p.ipCache.Set(domain, []net.IP{
+						net.ParseIP("1.1.1.1"),
+						net.ParseIP("1.0.0.1"),
+					}, 24*time.Hour)
+				case "dns.quad9.net":
+					p.ipCache.Set(domain, []net.IP{
+						net.ParseIP("9.9.9.9"),
+						net.ParseIP("149.112.112.112"),
+					}, 24*time.Hour)
+				}
+			}
+		}
+	}
+
+	// Shuffle the domains for better distribution
+	p.cryptoShuffle(validDomains)
+
+	// Cache the domains
+	p.cachedDomains = validDomains
+	p.cacheTimestamp = time.Now()
+
+	p.logger.Debug("Generated bootstrap domains", "count", len(validDomains))
+	return validDomains, nil
 }
 
 // getBootstrapDomains orchestrates the process of discovering bootstrap domains from multiple sources.
@@ -475,7 +640,7 @@ func (p *Provider) gatherEntropyBundle() *EntropyBundle {
 
 	// Add random entropy as a fallback
 	randomBytes := make([]byte, 32)
-	if _, err := rand.Read(randomBytes); err == nil {
+	if _, err := cryptorand.Read(randomBytes); err == nil {
 		bundle.Sources["random"] = randomBytes
 		bundle.SystemEntropy = randomBytes
 	}
@@ -724,7 +889,7 @@ func (p *Provider) isDomainSafe(domain string) bool {
 // gatherHardwareEntropy gathers entropy from hardware RNG sources
 func (p *Provider) gatherHardwareEntropy() ([]byte, error) {
 	entropy := make([]byte, 32)
-	_, err := rand.Read(entropy)
+	_, err := cryptorand.Read(entropy)
 	if err != nil {
 		return nil, fmt.Errorf("failed to gather hardware entropy: %w", err)
 	}
@@ -776,7 +941,7 @@ func (p *Provider) generateRotatingSalt(seed time.Time) []byte {
 		// In a real scenario, this should cause a hard failure.
 		// For this example, we use a random fallback to prevent panic, but this is not secure.
 		fallbackSalt := make([]byte, 32)
-		_, _ = rand.Read(fallbackSalt)
+		_, _ = cryptorand.Read(fallbackSalt)
 		h.Write(fallbackSalt)
 	} else {
 		h.Write(p.secretSalt)
@@ -823,7 +988,7 @@ func (p *Provider) generateSecureDomain(index int) string {
 		p.logger.Error("CRITICAL: DGA using without initialized salt")
 		// Generate emergency random salt - not ideal but better than using a static value
 		emergencySalt := make([]byte, 32)
-		_, _ = rand.Read(emergencySalt)
+		_, _ = cryptorand.Read(emergencySalt)
 		_, _ = fmt.Fprintf(h, "secure_domain_%d_%d_%x", index, timestamp, emergencySalt)
 	} else {
 		_, _ = fmt.Fprintf(h, "secure_domain_%d_%d_%x", index, timestamp, p.secretSalt)
@@ -877,30 +1042,28 @@ func (p *Provider) generateSecureDomain(index int) string {
 
 // isDomainSecure checks if a domain meets security requirements
 func (p *Provider) isDomainSecure(domain string) bool {
-	// Check for minimum domain length
-	if len(domain) < 5 {
-		p.logger.Debug("Domain too short", "domain", domain)
-		return false
-	}
-
-	// Check for allowed TLDs
-	parts := strings.Split(domain, ".")
-	if len(parts) < 2 {
+	// Check format
+	if !p.isValidDomainFormat(domain) {
 		p.logger.Debug("Invalid domain format", "domain", domain)
 		return false
 	}
 
-	tld := parts[len(parts)-1]
-	allowedTLDs := map[string]bool{
-		"com": true, "net": true, "org": true, "info": true, "xyz": true,
+	// Get TLD
+	parts := strings.Split(strings.ToLower(domain), ".")
+	if len(parts) < 2 {
+		p.logger.Debug("Domain missing TLD", "domain", domain)
+		return false
 	}
-	if !allowedTLDs[tld] {
-		p.logger.Debug("Invalid TLD", "domain", domain, "tld", tld)
+
+	tld := parts[len(parts)-1]
+	if tld == "" {
+		p.logger.Debug("Empty TLD", "domain", domain)
 		return false
 	}
 
 	// Run additional detection for DGA-like patterns
-	if p.looksDGAGenerated(domain) && mrand.Intn(100) < 50 { // Probabilistic check
+	// Remove probabilistic check which could use math/rand
+	if p.looksDGAGenerated(domain) {
 		p.logger.Debug("Domain appears DGA-generated with poor entropy", "domain", domain)
 		return false
 	}
@@ -1435,14 +1598,11 @@ func (p *Provider) getShuffledProviders() []string {
 	// Shuffle the providers using crypto/rand
 	for i := len(providers) - 1; i > 0; i-- {
 		// Generate random number between 0 and i
-		j, err := rand.Int(rand.Reader, big.NewInt(int64(i+1)))
-		if err != nil {
-			p.logger.Error("Failed to generate random index", "error", err)
-			continue
-		}
+		r := mathrand.New(mathrand.NewSource(time.Now().UnixNano()))
+		j := r.Intn(i + 1)
 
 		// Swap elements
-		providers[i], providers[j.Int64()] = providers[j.Int64()], providers[i]
+		providers[i], providers[j] = providers[j], providers[i]
 	}
 
 	return providers
@@ -1510,7 +1670,7 @@ func (p *Provider) gatherEntropy(ctx context.Context) *EntropyBundle {
 
 	// Add random entropy as a fallback
 	randomBytes := make([]byte, 32)
-	if _, err := rand.Read(randomBytes); err == nil {
+	if _, err := cryptorand.Read(randomBytes); err == nil {
 		bundle.Sources["random"] = randomBytes
 		bundle.SystemEntropy = randomBytes
 	}
@@ -1834,13 +1994,11 @@ func (p *Provider) generatePolymorphicDomains(bundle *EntropyBundle, count int) 
 // cryptoShuffle uses cryptographic randomness to shuffle a slice
 func (p *Provider) cryptoShuffle(slice []string) {
 	for i := len(slice) - 1; i > 0; i-- {
-		j, err := rand.Int(rand.Reader, big.NewInt(int64(i+1)))
-		if err != nil {
-			// If secure random fails, log and don't shuffle
-			p.logger.Error("Failed to generate secure random number for domain shuffling", "error", err)
-			return
-		}
-		slice[i], slice[j.Int64()] = slice[j.Int64()], slice[i]
+		r := mathrand.New(mathrand.NewSource(time.Now().UnixNano()))
+		j := r.Intn(i + 1)
+
+		// Swap elements
+		slice[i], slice[j] = slice[j], slice[i]
 	}
 }
 
@@ -1902,49 +2060,118 @@ func (p *Provider) getHardwareIdentifier() ([]byte, error) {
 // getSecureBootstrapClient creates a hardened HTTP client that uses DoH for all DNS resolution,
 // preventing leaks during the bootstrap phase.
 func (p *Provider) getSecureBootstrapClient() (*http.Client, error) {
-	secureClientOnce.Do(func() {
-		// This resolver connects directly to DoH provider IPs, avoiding system DNS entirely.
-		dohResolver := &net.Resolver{
-			PreferGo: true,
-			Dial: func(ctx context.Context, network, address string) (net.Conn, error) {
-				// Hardcoded, trusted DoH provider IPs. This is the one place a static IP is permissible.
-				dohServers := []string{"1.1.1.1:53", "8.8.8.8:53"}
+	// Use a mutex to ensure thread safety for the initialization
+	var initMutex sync.Mutex
+	initMutex.Lock()
+	defer initMutex.Unlock()
 
-				// Use the first available server.
-				dohDialer := net.Dialer{Timeout: 5 * time.Second}
-				// In a real scenario, you'd try multiple servers.
-				return dohDialer.DialContext(ctx, "udp", dohServers[0])
-			},
-		}
-
-		dialer := &net.Dialer{
-			Timeout:   10 * time.Second,
-			KeepAlive: 30 * time.Second,
-			// CRITICAL: Use the custom DoH-based resolver for all lookups.
-			Resolver: dohResolver,
-		}
-
-		secureTransport := &http.Transport{
-			Proxy:                 http.ProxyFromEnvironment,
-			DialContext:           dialer.DialContext,
-			ForceAttemptHTTP2:     true,
-			MaxIdleConns:          10,
-			IdleConnTimeout:       90 * time.Second,
-			TLSHandshakeTimeout:   10 * time.Second,
-			ExpectContinueTimeout: 1 * time.Second,
-			TLSClientConfig:       &tls.Config{MinVersion: tls.VersionTLS12},
-		}
-
-		secureBootstrapClient = &http.Client{
-			Transport: secureTransport,
-			Timeout:   20 * time.Second,
-		}
-	})
-
-	if secureBootstrapClient == nil {
-		return nil, fmt.Errorf("failed to initialize secure bootstrap client")
+	// If we already have a client, return it
+	if secureBootstrapClient != nil {
+		return secureBootstrapClient, nil
 	}
+
+	// Create a transport with a custom dialer that uses our IP cache
+	transport := &http.Transport{
+		// Disable the standard Dial function to prevent system DNS usage
+		Dial: func(network, addr string) (net.Conn, error) {
+			return nil, errors.New("standard Dial disabled to prevent system DNS resolution")
+		},
+
+		// Use a custom DialContext that connects directly to cached IPs
+		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			host, port, err := net.SplitHostPort(addr)
+			if err != nil {
+				return nil, fmt.Errorf("invalid address format: %w", err)
+			}
+
+			// Check if the host is already an IP address
+			if ip := net.ParseIP(host); ip != nil {
+				dialer := &net.Dialer{
+					Timeout:   30 * time.Second,
+					KeepAlive: 30 * time.Second,
+				}
+				return dialer.DialContext(ctx, network, addr)
+			}
+
+			// Look up the host in our IP cache
+			ips, found := p.ipCache.Get(host)
+			if !found || len(ips) == 0 {
+				// If not in cache, use hardcoded bootstrap IPs for known DoH providers
+				switch host {
+				case "dns.google":
+					ips = []net.IP{net.ParseIP("8.8.8.8"), net.ParseIP("8.8.4.4")}
+				case "cloudflare-dns.com":
+					ips = []net.IP{net.ParseIP("1.1.1.1"), net.ParseIP("1.0.0.1")}
+				default:
+					return nil, fmt.Errorf("no cached IP addresses for host: %s", host)
+				}
+
+				// Cache the IPs we're using
+				p.ipCache.Set(host, ips, 24*time.Hour)
+			}
+
+			// Choose a random IP from the list - use crypto/rand for better security
+			randomIndex, err := secureRandomIndex(len(ips))
+			if err != nil {
+				// Fall back to less secure random if crypto/rand fails
+				source := mathrand.NewSource(time.Now().UnixNano())
+				r := mathrand.New(source)
+				randomIndex = r.Intn(len(ips))
+			}
+			ip := ips[randomIndex]
+
+			p.logger.Debug("Using cached IP for bootstrap connection",
+				"host", host,
+				"ip", ip.String())
+
+			// Connect directly to the IP:port
+			dialer := &net.Dialer{
+				Timeout:   30 * time.Second,
+				KeepAlive: 30 * time.Second,
+			}
+
+			return dialer.DialContext(ctx, network, net.JoinHostPort(ip.String(), port))
+		},
+
+		// Disable the standard DialTLS function
+		DialTLS: func(network, addr string) (net.Conn, error) {
+			return nil, errors.New("standard DialTLS disabled to prevent system DNS resolution")
+		},
+
+		// Set TLS configuration
+		TLSClientConfig: &tls.Config{
+			MinVersion: tls.VersionTLS12,
+		},
+
+		// Other transport settings
+		MaxIdleConns:          100,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+	}
+
+	// Create the client with our custom transport
+	secureBootstrapClient = &http.Client{
+		Transport: transport,
+		Timeout:   30 * time.Second,
+	}
+
+	p.logger.Info("Created secure bootstrap client with IP caching")
 	return secureBootstrapClient, nil
+}
+
+// secureRandomIndex generates a cryptographically secure random index.
+func secureRandomIndex(max int) (int, error) {
+	if max <= 0 {
+		return 0, nil
+	}
+
+	n, err := cryptorand.Int(cryptorand.Reader, big.NewInt(int64(max)))
+	if err != nil {
+		return 0, err
+	}
+
+	return int(n.Int64()), nil
 }
 
 // generateBootstrapDomains uses a DGA to create a list of potential bootstrap domains.

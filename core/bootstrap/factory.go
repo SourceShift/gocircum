@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/gocircum/gocircum/pkg/logging"
 	"gopkg.in/yaml.v3"
 )
 
@@ -76,14 +77,10 @@ func LoadConfiguration(path string) (*BootstrapConfig, error) {
 	return &config, nil
 }
 
-// CreateProvidersFromConfig creates bootstrap providers from a config file
-func (f *ProviderFactory) CreateProvidersFromConfig(configPath string) ([]BootstrapProvider, error) {
-	config, err := LoadConfiguration(configPath)
-	if err != nil {
-		return nil, err
-	}
+// CreateProvidersFromConfig creates bootstrap providers from a configuration file
+func (f *ProviderFactory) CreateProvidersFromConfig(config *BootstrapConfig, manager *Manager) error {
+	var errors []error
 
-	var providers []BootstrapProvider
 	for _, providerConfig := range config.Providers {
 		if !providerConfig.Enabled {
 			f.logger.Debug("Skipping disabled bootstrap provider", "type", providerConfig.Type)
@@ -92,85 +89,59 @@ func (f *ProviderFactory) CreateProvidersFromConfig(configPath string) ([]Bootst
 
 		provider, err := f.CreateProvider(providerConfig)
 		if err != nil {
+			errors = append(errors, fmt.Errorf("failed to create %s provider: %w", providerConfig.Type, err))
 			f.logger.Warn("Failed to create bootstrap provider",
 				"type", providerConfig.Type,
 				"error", err)
 			continue
 		}
 
-		providers = append(providers, provider)
-	}
-
-	if len(providers) == 0 {
-		return nil, fmt.Errorf("no enabled bootstrap providers found in configuration")
-	}
-
-	return providers, nil
-}
-
-// InitializeFromConfig creates and initializes a BootstrapManager from a config file
-func InitializeFromConfig(configPath string, logger Logger) (*Manager, error) {
-	config, err := LoadConfiguration(configPath)
-	if err != nil {
-		return nil, err
-	}
-
-	manager, err := NewManager(*config, logger)
-	if err != nil {
-		return nil, err
-	}
-
-	factory := NewProviderFactory(logger)
-
-	for _, providerConfig := range config.Providers {
-		if !providerConfig.Enabled {
-			logger.Debug("Skipping disabled bootstrap provider", "type", providerConfig.Type)
-			continue
-		}
-
-		provider, err := factory.CreateProvider(providerConfig)
-		if err != nil {
-			logger.Warn("Failed to create bootstrap provider",
-				"type", providerConfig.Type,
-				"error", err)
-			continue
-		}
-
 		manager.RegisterProvider(provider)
+		f.logger.Debug("Registered bootstrap provider", "type", providerConfig.Type)
 	}
 
-	// Initialize IP pool if configured
-	var ipPoolConfig IPPoolConfig
-	for _, providerConfig := range config.Providers {
-		if providerConfig.Type == "ip_pool" && providerConfig.Enabled {
-			if err := decodeConfig(providerConfig.Config, &ipPoolConfig); err != nil {
-				logger.Warn("Failed to decode IP pool config", "error", err)
-				continue
-			}
-
-			if err := manager.InitializeIPPool(ipPoolConfig); err != nil {
-				logger.Warn("Failed to initialize IP pool", "error", err)
-				// Continue even if IP pool fails
-			}
-			break
-		}
-	}
-
-	return manager, nil
-}
-
-// decodeConfig is a helper function to decode configuration maps into structs
-func decodeConfig(configMap map[string]interface{}, result interface{}) error {
-	// Marshal the map back to JSON
-	jsonBytes, err := yaml.Marshal(configMap)
-	if err != nil {
-		return fmt.Errorf("failed to marshal config map: %w", err)
-	}
-
-	// Unmarshal JSON into the target struct
-	if err := yaml.Unmarshal(jsonBytes, result); err != nil {
-		return fmt.Errorf("failed to unmarshal config: %w", err)
+	if len(errors) > 0 {
+		return fmt.Errorf("failed to create some providers: %v", errors)
 	}
 
 	return nil
+}
+
+// InitializeFromConfig initializes a bootstrap manager from a config file
+func InitializeFromConfig(configPath string, logger logging.Logger) (*Manager, error) {
+	config, err := LoadConfiguration(configPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load bootstrap config: %w", err)
+	}
+
+	// Create the manager
+	manager, err := NewManager(config, logger)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create bootstrap manager: %w", err)
+	}
+
+	// Initialize the IP pool if configured
+	if config.IPPoolConfig != nil {
+		err = manager.InitializeIPPool(*config.IPPoolConfig)
+		if err != nil {
+			logger.Warn("Failed to initialize IP pool", "error", err)
+		}
+	}
+
+	// Register discovery channels if enabled
+	if config.UseDiscoveryChannels {
+		err = manager.RegisterDiscoveryChannels()
+		if err != nil {
+			logger.Warn("Failed to register discovery channels", "error", err)
+		}
+	}
+
+	// Create and register bootstrap providers
+	factory := NewProviderFactory(logger)
+	err = factory.CreateProvidersFromConfig(config, manager)
+	if err != nil {
+		logger.Warn("Failed to create some bootstrap providers", "error", err)
+	}
+
+	return manager, nil
 }

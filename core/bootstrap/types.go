@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/gocircum/gocircum/core/bootstrap/channels"
 	"github.com/gocircum/gocircum/pkg/logging"
 )
 
@@ -69,20 +70,17 @@ func (eb *EntropyBundle) AddSource(name string, data []byte, quality float64) {
 
 // BootstrapResult represents the result of a bootstrap discovery attempt
 type BootstrapResult struct {
-	// Provider is the name of the provider that discovered these addresses
-	Provider string
+	// List of discovered bootstrap addresses
+	Addresses []string `json:"addresses"`
 
-	// Addresses is a list of bootstrap addresses in the format "ip:port"
-	Addresses []string
+	// Source of the bootstrap addresses (e.g., "cache", "providers", "discovery_channels")
+	Source string `json:"source"`
 
-	// Timestamp is when these addresses were discovered
-	Timestamp time.Time
+	// Timestamp when the addresses were discovered
+	Timestamp time.Time `json:"timestamp"`
 
-	// TTL is how long these addresses are valid for
-	TTL time.Duration
-
-	// DiscoveryMethod indicates how these addresses were discovered
-	DiscoveryMethod string
+	// Additional metadata about the discovery process
+	Metadata map[string]interface{} `json:"metadata,omitempty"`
 }
 
 // HealthCheckOptions configures how bootstrap addresses are health-checked
@@ -102,23 +100,29 @@ type HealthCheckOptions struct {
 
 // BootstrapConfig defines the configuration for bootstrap discovery
 type BootstrapConfig struct {
-	// Providers is a list of bootstrap provider configurations
-	Providers []ProviderConfig `yaml:"providers"`
+	// List of bootstrap providers to use for discovery
+	Providers []ProviderConfig `json:"providers" yaml:"providers"`
 
-	// HealthCheck configures how bootstrap addresses are validated
-	HealthCheck HealthCheckOptions `yaml:"health_check"`
+	// Options for checking the health of discovered bootstraps
+	HealthCheck HealthCheckOptions `json:"health_check" yaml:"health_check"`
 
-	// CacheTTL is how long discovered addresses are cached
-	CacheTTL time.Duration `yaml:"cache_ttl"`
+	// Configuration for DGA-based discovery
+	EntropyConfig EntropyConfig `json:"entropy" yaml:"entropy"`
 
-	// EntropyConfig configures the entropy sources for domain generation
-	EntropyConfig EntropyConfig `yaml:"entropy_config"`
+	// Configuration for discovery channels
+	DiscoveryChannels []channels.ChannelConfig `json:"discovery_channels" yaml:"discovery_channels"`
 
-	// DynamicDiscoveryConfig configures dynamic discovery mechanisms
-	DynamicDiscoveryConfig DynamicDiscoveryConfig `yaml:"dynamic_discovery"`
+	// Whether to use discovery channels for bootstrap discovery
+	UseDiscoveryChannels bool `json:"use_discovery_channels" yaml:"use_discovery_channels"`
 
-	// SECURITY: FallbackAddresses is removed to eliminate static bootstrap points
-	// All bootstrap addresses must be dynamically discovered
+	// Whether to use cached bootstraps when available
+	UseCachedBootstraps bool `json:"use_cached_bootstraps" yaml:"use_cached_bootstraps"`
+
+	// Time-to-live for cached bootstrap results
+	CacheTTL time.Duration `json:"cache_ttl" yaml:"cache_ttl"`
+
+	// Configuration for the IP pool
+	IPPoolConfig *IPPoolConfig `json:"ip_pool,omitempty" yaml:"ip_pool,omitempty"`
 }
 
 // EntropyConfig configures entropy sources for secure domain generation

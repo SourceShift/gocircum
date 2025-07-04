@@ -79,4 +79,86 @@ providers:
       max_size: 1000
       min_size: 10
       refresh_interval: 12h
-      persist_path: "/var/lib/gocircum/bootstrap_pool.json" 
+      persist_path: "/var/lib/gocircum/bootstrap_pool.json"
+
+# BootstrapConfig Example
+# This example shows how to configure bootstrap discovery
+
+# Enable dynamic discovery channels and disable static endpoints
+use_discovery_channels: true
+use_cached_bootstraps: true
+cache_ttl: 24h
+
+# Configure health check options for discovered bootstraps
+health_check:
+  enabled: true
+  timeout: 5s
+  connection_type: tcp
+  required_success_count: 2
+  max_parallelism: 20
+
+# Configure entropy sources for domain generation
+entropy:
+  sources:
+    - type: time
+      weight: 0.5
+    - type: blockchain
+      weight: 0.3
+      block_source: ethereum
+    - type: dns
+      weight: 0.2
+      seeds:
+        - seed1.example.org
+        - seed2.example.org
+
+# Configure discovery channels
+discovery_channels:
+  - type: dns
+    enabled: true
+    priority: 100
+    timeout: 15s
+    options:
+      domains_per_iteration: 5
+      record_types:
+        - TXT
+        - SRV
+  
+  - type: https
+    enabled: true
+    priority: 80
+    timeout: 20s
+    options:
+      path_template: "/.well-known/bootstrap"
+      client_timeout: 10s
+  
+  - type: peer_exchange
+    enabled: true
+    priority: 60
+    timeout: 30s
+    options:
+      refresh_interval: 1h
+      max_peers: 50
+      # Only used for initial bootstrap - future peers are discovered dynamically
+      initial_peers:
+        - bootstrap1.example.org:443
+        - bootstrap2.example.org:443
+
+# Deprecated providers - will be removed in the future
+providers:
+  - type: doh
+    enabled: false
+    priority: 50
+    providers:
+      - https://cloudflare-dns.com/dns-query
+      - https://dns.google/dns-query
+  
+  - type: domain_fronting
+    enabled: false
+    priority: 40
+    hosts:
+      - front: cdn.example.com
+        target: hidden.example.com
+  
+  - type: well_known
+    enabled: false
+    priority: 30 

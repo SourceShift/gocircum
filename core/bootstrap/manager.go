@@ -6,7 +6,67 @@ import (
 	"sort"
 	"sync"
 	"time"
+
+	"github.com/gocircum/gocircum/core/bootstrap/channels"
+	"github.com/gocircum/gocircum/pkg/logging"
 )
+
+// EntropyManager handles entropy collection and management for secure randomization
+type EntropyManager struct {
+	logger logging.Logger
+}
+
+// NewEntropyManager creates a new entropy manager
+func NewEntropyManager(logger logging.Logger) *EntropyManager {
+	if logger == nil {
+		logger = logging.GetLogger()
+	}
+	return &EntropyManager{
+		logger: logger,
+	}
+}
+
+// PeerPool manages peer-discovered bootstrap addresses
+type PeerPool struct {
+	peerNetworkEnabled bool
+	peerAddresses      []string
+	mutex              sync.RWMutex
+}
+
+// NewPeerPool creates a new peer pool
+func NewPeerPool() *PeerPool {
+	return &PeerPool{
+		peerNetworkEnabled: false,
+		peerAddresses:      []string{},
+	}
+}
+
+// IsPeerNetworkEnabled returns whether peer discovery is enabled
+func (pp *PeerPool) IsPeerNetworkEnabled() bool {
+	return pp.peerNetworkEnabled
+}
+
+// GetPeerDiscoveredAddresses returns addresses discovered by peers
+func (pp *PeerPool) GetPeerDiscoveredAddresses(ctx context.Context) ([]string, error) {
+	pp.mutex.RLock()
+	defer pp.mutex.RUnlock()
+
+	if len(pp.peerAddresses) == 0 {
+		return nil, fmt.Errorf("no peer-discovered addresses available")
+	}
+
+	return pp.peerAddresses, nil
+}
+
+// GetAllAddresses returns all peer addresses
+func (pp *PeerPool) GetAllAddresses() []string {
+	pp.mutex.RLock()
+	defer pp.mutex.RUnlock()
+
+	result := make([]string, len(pp.peerAddresses))
+	copy(result, pp.peerAddresses)
+	return result
+}
 
 // Manager is responsible for orchestrating different bootstrap discovery methods
 // and providing access to discovered bootstrap addresses
@@ -14,30 +74,46 @@ type Manager struct {
 	providers     []BootstrapProvider
 	cache         map[string]*BootstrapResult
 	mutex         sync.RWMutex
-	logger        Logger
+	logger        logging.Logger
 	healthCheck   HealthCheckOptions
 	fallbackAddrs []string
 	cacheTTL      time.Duration
 	ipPool        *IPPool
 	peerPool      *PeerPool
+	config        *BootstrapConfig
+
+	// New fields for discovery channels
+	channelManager *channels.DiscoveryManager
+	channelFactory *channels.ChannelFactory
+
+	entropyManager *EntropyManager
 
 	// For testing
 	createEmergencyFallbackPhaseFunc func() DecentralizedDiscoveryPhase
 }
 
 // NewManager creates a new bootstrap manager with the given configuration
-func NewManager(config BootstrapConfig, logger Logger) (*Manager, error) {
+func NewManager(config *BootstrapConfig, logger logging.Logger) (*Manager, error) {
 	if logger == nil {
-		return nil, fmt.Errorf("logger cannot be nil")
+		logger = logging.GetLogger()
 	}
 
+	// Create the channel manager and factory
+	channelManager := channels.NewDiscoveryManager(logger, 1) // Minimum 1 successful channel
+	channelFactory := channels.NewChannelFactory(logger)
+
 	m := &Manager{
-		providers:     make([]BootstrapProvider, 0),
-		cache:         make(map[string]*BootstrapResult),
-		logger:        logger,
-		healthCheck:   config.HealthCheck,
-		fallbackAddrs: []string{},
-		cacheTTL:      config.CacheTTL,
+		providers:      make([]BootstrapProvider, 0),
+		cache:          make(map[string]*BootstrapResult),
+		logger:         logger,
+		healthCheck:    config.HealthCheck,
+		fallbackAddrs:  []string{}, // Initialize with empty fallback addresses
+		cacheTTL:       config.CacheTTL,
+		peerPool:       NewPeerPool(),
+		channelManager: channelManager,
+		channelFactory: channelFactory,
+		entropyManager: NewEntropyManager(logger),
+		config:         config,
 	}
 
 	// Set default TTL if not provided
@@ -61,14 +137,64 @@ func (m *Manager) RegisterProvider(provider BootstrapProvider) {
 	})
 }
 
-// DiscoverBootstraps implements fully decentralized bootstrap discovery with consensus
-func (m *Manager) DiscoverBootstraps(ctx context.Context) ([]string, error) {
+// RegisterDiscoveryChannels registers discovery channels from the configuration
+func (m *Manager) RegisterDiscoveryChannels() error {
+	if len(m.config.DiscoveryChannels) == 0 {
+		m.logger.Warn("No discovery channels configured")
+		return nil
+	}
+
+	return m.channelFactory.RegisterChannelsFromConfig(m.channelManager, m.config.DiscoveryChannels)
+}
+
+// DiscoverBootstraps implements decentralized bootstrap discovery
+// It checks for cached addresses, peer-discovered addresses, and
+// registered providers, with fallback to decentralized discovery
+// if necessary
+func (m *Manager) DiscoverBootstraps(ctx context.Context) (*BootstrapResult, error) {
+	m.logger.Debug("Starting bootstrap discovery process")
+
+	// Initialize the result
+	result := &BootstrapResult{
+		Addresses: make([]string, 0),
+	}
+
+	// First, try to discover using our discovery channels
+	if m.channelManager != nil && m.config.UseDiscoveryChannels {
+		m.logger.Debug("Attempting to discover using discovery channels")
+		addresses, err := m.channelManager.DiscoverEndpoints(ctx)
+		if err != nil {
+			m.logger.Warn("Discovery channels failed, falling back to providers", "error", err)
+		} else if len(addresses) > 0 {
+			m.logger.Debug("Found addresses via discovery channels", "count", len(addresses))
+			result.Addresses = append(result.Addresses, addresses...)
+			result.Source = "discovery_channels"
+			return result, nil
+		}
+	}
+
+	// If discovery channels don't yield results, fall back to existing methods
+
+	// Check cached addresses first if enabled
+	if m.config.UseCachedBootstraps {
+		m.logger.Debug("Checking cached bootstraps")
+		cached := m.peerPool.GetAllAddresses()
+		if len(cached) > 0 {
+			m.logger.Debug("Using cached bootstrap addresses", "count", len(cached))
+			result.Addresses = cached
+			result.Source = "cache"
+			return result, nil
+		}
+	}
+
 	// First check for cached addresses
 	if m.ipPool != nil && !m.ipPool.NeedsRefresh() {
 		addresses := m.ipPool.GetAddresses()
 		if len(addresses) > 0 {
 			m.logger.Debug("Using cached addresses from IP pool", "count", len(addresses))
-			return addresses, nil
+			result.Addresses = addresses
+			result.Source = "ip_pool"
+			return result, nil
 		}
 	}
 
@@ -91,7 +217,9 @@ func (m *Manager) DiscoverBootstraps(ctx context.Context) ([]string, error) {
 				}
 			}
 
-			return peerAddrs, nil
+			result.Addresses = peerAddrs
+			result.Source = "peer_pool"
+			return result, nil
 		}
 	}
 
@@ -160,7 +288,9 @@ func (m *Manager) DiscoverBootstraps(ctx context.Context) ([]string, error) {
 				}
 			}
 
-			return allAddresses, nil
+			result.Addresses = allAddresses
+			result.Source = "providers"
+			return result, nil
 		}
 	}
 
@@ -176,7 +306,9 @@ func (m *Manager) DiscoverBootstraps(ctx context.Context) ([]string, error) {
 		// Fall back to emergency addresses if network initialization fails
 		if len(m.fallbackAddrs) > 0 {
 			m.logger.Info("Using fallback addresses", "count", len(m.fallbackAddrs))
-			return m.fallbackAddrs, nil
+			result.Addresses = m.fallbackAddrs
+			result.Source = "fallback"
+			return result, nil
 		}
 		return nil, fmt.Errorf("failed to initialize decentralized network: %w", err)
 	}
@@ -229,7 +361,9 @@ collectLoop:
 		// Fall back to emergency addresses if consensus fails
 		if len(m.fallbackAddrs) > 0 {
 			m.logger.Info("Using fallback addresses after consensus failure", "count", len(m.fallbackAddrs))
-			return m.fallbackAddrs, nil
+			result.Addresses = m.fallbackAddrs
+			result.Source = "fallback"
+			return result, nil
 		}
 		return nil, fmt.Errorf("consensus algorithm failed: %w", err)
 	}
@@ -245,7 +379,9 @@ collectLoop:
 		// Fall back to emergency addresses as last resort
 		if len(m.fallbackAddrs) > 0 {
 			m.logger.Info("Using fallback addresses as last resort", "count", len(m.fallbackAddrs))
-			return m.fallbackAddrs, nil
+			result.Addresses = m.fallbackAddrs
+			result.Source = "fallback"
+			return result, nil
 		}
 		return nil, fmt.Errorf("decentralized discovery produced no valid addresses")
 	}
@@ -263,30 +399,9 @@ collectLoop:
 	}
 
 	m.logger.Info("Decentralized discovery successful", "address_count", len(finalAddresses))
-	return finalAddresses, nil
-}
-
-// PeerPool manages peer-discovered bootstrap addresses
-type PeerPool struct {
-	peerNetworkEnabled bool
-	peerAddresses      []string
-}
-
-// IsPeerNetworkEnabled returns whether peer network discovery is enabled
-func (pp *PeerPool) IsPeerNetworkEnabled() bool {
-	return pp.peerNetworkEnabled
-}
-
-// GetPeerDiscoveredAddresses retrieves bootstrap addresses from connected peers
-func (pp *PeerPool) GetPeerDiscoveredAddresses(ctx context.Context) ([]string, error) {
-	if !pp.peerNetworkEnabled {
-		return nil, fmt.Errorf("peer network discovery is disabled")
-	}
-
-	// In a real implementation, this would connect to peers
-	// and retrieve bootstrap addresses from them
-
-	return pp.peerAddresses, nil
+	result.Addresses = finalAddresses
+	result.Source = "decentralized_discovery"
+	return result, nil
 }
 
 // PeerPoolConfig configures the peer pool
@@ -767,7 +882,7 @@ func (m *Manager) GetCachedAddresses() []string {
 				return
 			}
 
-			m.logger.Debug("Added new addresses to IP pool", "count", len(addresses))
+			m.logger.Debug("Added new addresses to IP pool", "count", len(addresses.Addresses))
 		}()
 	}
 
